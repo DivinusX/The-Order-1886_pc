@@ -197,7 +197,7 @@ func TestReceiptReadIsBounded(t *testing.T) {
 	target, _ := url.Parse(server.URL)
 	client := *server.Client()
 	client.Transport = routedTransport{target, client.Transport}
-	if _, err := fetchMetadata(context.Background(), releaseClient(&client), "https://api.github.com/repos/" + repository + "/releases", maxManifest); err == nil {
+	if _, err := fetchMetadata(context.Background(), releaseClient(&client), "https://api.github.com/repos/"+repository+"/releases", maxManifest); err == nil {
 		t.Fatal(fmt.Sprintf("accepted metadata exceeding %d bytes", maxManifest))
 	}
 }
