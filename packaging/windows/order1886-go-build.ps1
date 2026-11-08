@@ -207,6 +207,11 @@ if ($LASTEXITCODE) { throw 'Python notices generation failed.' }
 $scriptData = Join-Path $stage 'scripts'
 New-Item -ItemType Directory -Force -Path $scriptData | Out-Null
 foreach ($name in @('prepare.py','link_modules.py','link_libc.py','save_backup.py',
+        # Packaging coverage (tests/test_order1886_packaging_coverage.py) walks every
+        # import of the shipped backend; these six on-disk modules were unlisted and
+        # are added for completeness of the worker payload.
+        'game_update.py','guest_memory.py','isa_rewrite.py','mods.py',
+        'order1886_diagnostics.py','runtime_build_identity.py',
         'order1886_frame_rate.py','order1886_display.py','order1886_resolution.py','order1886_post_effects.py','order1886_cache.py',
         'order1886_steam.py','order1886_mods.py','order1886_trophy_history.py','order1886_trophy_text.py','order1886_input.py',
         # performance.report reads the recorded CSV through the shared frame-trace parser.
