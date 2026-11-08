@@ -132,7 +132,10 @@ try {
         }
         $bundleDst = Join-Path $runtimeBin 'fsr4'
         New-Item -ItemType Directory -Force -Path $bundleDst | Out-Null
-        Copy-Item -LiteralPath (Join-Path $bundleSrc '*') -Destination $bundleDst -Recurse -Force
+        # -LiteralPath does not expand '*'; enumerate the folder instead.
+        Get-ChildItem -LiteralPath $bundleSrc -Force | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination $bundleDst -Recurse -Force
+        }
     } else {
         Write-Warning 'No -Fsr4Assets folder: the package ships without the FSR 4 v07 bundle (FSR 3.1 fallback only).'
     }
