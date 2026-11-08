@@ -55,7 +55,12 @@ OrderUpscaleStatus fail(OrderUpscaleStatus status, const char* message, char* er
 }
 
 bool read_file(const std::filesystem::path& path, std::vector<uint8_t>& out) {
+#ifdef _WIN32
+    // path::value_type is wchar_t on Windows: the narrow fopen would not even compile.
+    std::FILE* file = _wfopen(path.c_str(), L"rb");
+#else
     std::FILE* file = std::fopen(path.c_str(), "rb");
+#endif
     if (!file) return false;
     std::fseek(file, 0, SEEK_END);
     const long size = std::ftell(file);
