@@ -9,6 +9,22 @@
 #include "video_core/renderer_vulkan/vk_async_compiler.h"
 
 int main() {
+    // The Windows CPU-check CI runner has no Vulkan ICD; skip with a visible reason
+    // instead of asserting, exactly like the pipeline-binary-initialization probe.
+    // Machines with any Vulkan device (Linux CI, player PCs) still run the full test.
+    VkInstance probe{};
+    const VkInstanceCreateInfo probe_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+    if (vkCreateInstance(&probe_info, nullptr, &probe) != VK_SUCCESS) {
+        std::puts("async-pipeline-cache-test: SKIP (no Vulkan device)");
+        return 0;
+    }
+    uint32_t probe_count = 0;
+    vkEnumeratePhysicalDevices(probe, &probe_count, nullptr);
+    vkDestroyInstance(probe, nullptr);
+    if (!probe_count) {
+        std::puts("async-pipeline-cache-test: SKIP (no Vulkan device)");
+        return 0;
+    }
     VkInstance instance{};
     VkInstanceCreateInfo instance_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
     assert(vkCreateInstance(&instance_info, nullptr, &instance) == VK_SUCCESS);

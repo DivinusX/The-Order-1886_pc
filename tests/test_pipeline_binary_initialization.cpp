@@ -88,7 +88,49 @@ void TestFallbacks() {
 }
 }
 
+// A GPU-free CI runner (the Windows CPU-check job has no Vulkan installable client
+// driver) cannot build a real Vulkan::Instance - the renderer library asserts and the
+// test dies. Probe the loader for at least one physical device and skip cleanly when
+// there is none; a machine with a driver (Linux CI, any player PC) still runs the test.
+// The project links Vulkan through a dynamic loader with VK_NO_PROTOTYPES, so the raw
+// vk* entry points are not declared; resolve them as function pointers via the loader,
+// the same way vk_platform.cpp does, touching no global dispatcher and throwing nothing.
+static bool has_vulkan_device() {
+    vk::detail::DynamicLoader dl;
+    auto get_instance_proc = dl.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
+    if (!get_instance_proc)
+        return false;
+    auto create = reinterpret_cast<PFN_vkCreateInstance>(get_instance_proc(nullptr, "vkCreateInstance"));
+    if (!create)
+        return false;
+    const VkApplicationInfo app{.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
+                                .pApplicationName = "pipeline-binary-test-probe",
+                                .apiVersion = VK_API_VERSION_1_1};
+    const VkInstanceCreateInfo ci{.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+                                  .pApplicationInfo = &app};
+    VkInstance instance{};
+    if (create(&ci, nullptr, &instance) != VK_SUCCESS)
+        return false;
+    // instance-level entry points resolve through the created instance handle
+    auto enumerate = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(
+        get_instance_proc(instance, "vkEnumeratePhysicalDevices"));
+    auto destroy = reinterpret_cast<PFN_vkDestroyInstance>(get_instance_proc(instance, "vkDestroyInstance"));
+    if (!enumerate || !destroy) {
+        if (destroy)
+            destroy(instance, nullptr);
+        return false;
+    }
+    uint32_t count = 0;
+    const VkResult enumerated = enumerate(instance, &count, nullptr);
+    destroy(instance, nullptr);
+    return enumerated == VK_SUCCESS && count > 0;
+}
+
 int main(int argc, char**) {
+    if (!has_vulkan_device()) {
+        std::puts("pipeline-binary-initialization-test: SKIP (no Vulkan device)");
+        return 0;
+    }
     const bool enabled = argc > 1;
     SetCache(enabled ? "1" : "0");
     Vulkan::Instance instance{s32{-1}, false};
