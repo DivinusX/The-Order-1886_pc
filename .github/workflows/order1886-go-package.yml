@@ -46,20 +46,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: false
-      - name: Stage the FSR 4 v07 asset bundle (platform-neutral bytes from a published package)
-        run: |
-          set -euo pipefail
-          url='${{ inputs.fsr4_bundle_url }}'
-          if [ -n "$url" ]; then
-            mkdir -p out/fsr4-stage
-            curl -L --fail -sS -o out/fsr4-published.tar.gz "$url"
-            tar -xzf out/fsr4-published.tar.gz -C out/fsr4-stage --wildcards '*/bin/fsr4/*'
-            mv out/fsr4-stage/*/bin/fsr4 out/fsr4-assets
-            rm -rf out/fsr4-stage
-            echo "FSR 4 bundle staged: $(ls out/fsr4-assets | wc -l) files"
-          else
-            echo 'No bundle URL: package ships FSR 3.1 fallback only.'
-          fi
       - name: Initialize only required native dependencies
         shell: pwsh
         run: |
@@ -79,6 +65,20 @@ jobs:
             vulkan-headers:p vulkan-loader:p vulkan-memory-allocator:p glslang:p
             sdl3:p fmt:p boost:p robin-map:p xxhash:p ffmpeg:p zydis:p
             spirv-tools:p spirv-headers:p spirv-cross:p
+      - name: Stage the FSR 4 v07 asset bundle (platform-neutral bytes from a published package)
+        run: |
+          set -euo pipefail
+          url='${{ inputs.fsr4_bundle_url }}'
+          if [ -n "$url" ]; then
+            mkdir -p out/fsr4-stage
+            curl -L --fail -sS -o out/fsr4-published.tar.gz "$url"
+            tar -xzf out/fsr4-published.tar.gz -C out/fsr4-stage --wildcards '*/bin/fsr4/*'
+            mv out/fsr4-stage/*/bin/fsr4 out/fsr4-assets
+            rm -rf out/fsr4-stage
+            echo "FSR 4 bundle staged: $(ls out/fsr4-assets | wc -l) files"
+          else
+            echo 'No bundle URL: package ships FSR 3.1 fallback only.'
+          fi
       - name: Build the Order native runtime and run CPU checks
         run: |
           set -euo pipefail
