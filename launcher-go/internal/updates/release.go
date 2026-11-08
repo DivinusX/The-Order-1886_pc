@@ -17,7 +17,14 @@ import (
 	"time"
 )
 
-const repository = "JulioCacko/The-Order-1886_pc"
+// The fork's packages must never auto-update onto upstream builds - upstream's releases
+// would pass the receipt check and silently replace this lineage's fixes (FSR 4 wiring,
+// the sun-shadow staging sync, the HTILE expand). Pointing at the fork's own releases is
+// safe by construction: the fork's releases publish a zip + .sha256 but no updater
+// receipt, so the updater reports "no update available" and the documented channel stays
+// manual extraction (QUICKSTART/WINDOWS.md). Adding fork-side receipts would re-enable
+// in-app updates on this channel.
+const repository = "DivinusX/a-port-of-the-order-1886-thats-actually-alive"
 const goAsset = "order1886-go-windows.zip"
 
 var releaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-go-preview\.[0-9]+)?$`)

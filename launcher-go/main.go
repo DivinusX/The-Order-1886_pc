@@ -203,8 +203,8 @@ func (app *App) Browse(kind string) (string, error) {
 
 func (app *App) OpenLink(name string) error {
 	links := map[string]string{
-		"releases": "https://github.com/JulioCacko/The-Order-1886_pc/releases",
-		"issues":   "https://github.com/JulioCacko/The-Order-1886_pc/issues",
+		"releases": "https://github.com/DivinusX/a-port-of-the-order-1886-thats-actually-alive/releases",
+		"issues":   "https://github.com/DivinusX/a-port-of-the-order-1886-thats-actually-alive/issues",
 	}
 	url, ok := links[name]
 	if !ok {
