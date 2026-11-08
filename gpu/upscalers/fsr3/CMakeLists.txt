@@ -25,6 +25,18 @@ target_include_directories(order1886_fsr3 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/.
 target_link_libraries(order1886_fsr3 PRIVATE ffx-vulkan::portable)
 set_target_properties(order1886_fsr3 PROPERTIES PREFIX "" OUTPUT_NAME "order1886_fsr3")
 
+# mingw-w64 lacks the MSVC spellings the FFX 1.1.4 host uses (_countof; swprintf_s needs
+# <wchar.h> that the SDK translation units do not include). Force-include a guarded compat
+# header on the FFX targets and this provider only - upstream sources stay untouched.
+if (MINGW)
+    set(ORDER1886_FFX_COMPAT "${CMAKE_CURRENT_SOURCE_DIR}/../ffx_mingw_compat.h")
+    foreach (ffd ffx_vulkan_portable ffx_vulkan_fsr3_vk_backend_1_1_4 ffx_vulkan_fsr3_host_1_1_4 order1886_fsr3)
+        if (TARGET ${ffd})
+            target_compile_options(${ffd} PRIVATE "SHELL:-include ${ORDER1886_FFX_COMPAT}")
+        endif()
+    endforeach()
+endif()
+
 if(ORDER1886_FSR3_BUILD_GPU_SMOKE)
     add_executable(order1886_fsr3_gpu_smoke EXCLUDE_FROM_ALL tests/provider_gpu_smoke.cpp)
     target_compile_features(order1886_fsr3_gpu_smoke PRIVATE cxx_std_17)
