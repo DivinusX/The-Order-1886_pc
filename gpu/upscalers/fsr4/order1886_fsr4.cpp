@@ -35,7 +35,10 @@
 #include <string>
 #include <vector>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
 #include <unistd.h>
 #endif
 
@@ -70,7 +73,18 @@ std::vector<std::filesystem::path> asset_roots() {
     std::vector<std::filesystem::path> roots;
     if (const char* env = std::getenv("ORDER1886_FSR4_ASSETS"); env && *env)
         roots.emplace_back(env);
-#ifndef _WIN32
+#ifdef _WIN32
+    // The same beside-the-exe search as vk_upscale_providers.cpp: the worker starts the
+    // runtime with cwd = user/order1886, so the current-path roots below never hit.
+    std::vector<wchar_t> buf(4096);
+    const DWORD len = ::GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size() - 1));
+    if (len > 0 && len < buf.size()) {
+        auto dir = std::filesystem::path(std::wstring(buf.data(), len)).parent_path();
+        roots.push_back(dir / "fsr4");
+        roots.push_back(dir / "gpu" / "fsr4");
+        roots.push_back(std::move(dir));
+    }
+#else
     std::vector<char> buf(4096);
     const ssize_t len = ::readlink("/proc/self/exe", buf.data(), buf.size() - 1);
     if (len > 0) {

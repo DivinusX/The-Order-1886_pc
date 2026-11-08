@@ -9,6 +9,11 @@
 #include "cpu_check.h"
 #include "isa_rewrite.h"
 #include "gpu/ps4gpu.h"
+#ifdef _WIN32
+/* src/pad_diag_windows.c - the runtime wrapper's pad check runs in sh on Linux; the
+ * .exe is the entry point here, so the same diagnostics live in the binary. */
+void order1886_pad_check_windows(void);
+#endif
 #if !defined(__x86_64__) || !defined(__GNUC__)
 #error This prototype requires x86-64 GCC or Clang (including MinGW).
 #endif
@@ -513,6 +518,11 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Usage: %s boot.bin [--cpu-only] [--strict-imports] [--check-imports] [--app0 dir] [--user dir] [--patches file] [--isa-rewrite file] [--mount guest=host]... [--timeout seconds] | --vulkan-only | --cpu-features | --gamepad\n", argv[0]);
         return 1;
     }
+#ifdef _WIN32
+    /* Every --flag form returned above; reaching here means a real boot, the same
+       condition the Linux wrapper gates its pad check on. Best-effort, never fatal. */
+    order1886_pad_check_windows();
+#endif
     if (!cpu_supported(missing, sizeof missing)) return 20;
     if (cpu_missing_sets) printf("CPU: missing %s\n", missing);
     /* ORDER1886_ISA_REWRITE=0 never rewrites, =1 rewrites every site; by default the sets the CPU lacks. */

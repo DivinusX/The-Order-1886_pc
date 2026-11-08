@@ -17,7 +17,7 @@ From the repository in PowerShell:
 & C:\msys64\usr\bin\bash.exe build.sh --test
 ```
 
-The script initializes MSYS2 paths, handles Windows checkout line endings, configures CMake with CLANG64, and builds the dedicated order1886-runtime target. Outputs: out/order1886-runtime.exe, out/ps4-gpu-capabilities.exe and out/runtime-build.json. The receipt binds source revision, dirty state, compiler, source-file digest and submodule revisions to the executable SHA256.
+The script initializes MSYS2 paths, handles Windows checkout line endings, configures CMake with CLANG64, and builds the dedicated order1886-runtime target. Outputs: out/order1886-runtime.exe, out/ps4-gpu-capabilities.exe, out/runtime-build.json, and the upscaler providers out/order1886_fsr3.dll and out/order1886_fsr4.dll (the FSR 4 provider needs the v07 asset bundle staged into the package's `bin/fsr4/`; without it the runtime falls back to FSR 3.1 and says why in the log). The receipt binds source revision, dirty state, compiler, source-file digest and submodule revisions to the executable SHA256.
 
 Install Windows Python 3.11+ with Tk, Pillow and iced-x86 for source-launcher/image preparation. The package builder creates its private Python environment. Packaged users do not require Python or MSYS2.
 

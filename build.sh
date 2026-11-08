@@ -33,14 +33,19 @@ MINGW*|MSYS*)
         echo 'Build failed (full log: out/gpu-build.log)' >&2; exit 1
     fi
     cp out/gpu/order1886-runtime.exe out/gpu/ps4-gpu-capabilities.exe out/
-    # FSR 3.1 provider, loaded by the runtime from its own folder (vk_upscale_providers.cpp).
-    cmake -S gpu/upscalers/fsr3 -B out/fsr3-provider -G Ninja -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ >/dev/null
-    if ! ninja -C out/fsr3-provider order1886_fsr3 >> out/gpu-build.log 2>&1; then
-        grep -v '^\[' out/gpu-build.log | tail -40 >&2
-        echo 'FSR 3.1 provider build failed (full log: out/gpu-build.log)' >&2; exit 1
-    fi
-    cp out/fsr3-provider/order1886_fsr3.dll out/
+    # Upscaler providers, loaded by the runtime from its own folder (vk_upscale_providers.cpp).
+    # FSR 3.1 is the fallback when the device cannot run the FSR 4 v07 shaders (#12); the
+    # provider target itself is platform-neutral (only ${CMAKE_DL_LIBS} was Linux-only).
+    for provider in fsr3 fsr4; do
+        cmake -S "gpu/upscalers/$provider" -B "out/$provider-provider" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ >/dev/null
+        if ! ninja -C "out/$provider-provider" "order1886_$provider" >> out/gpu-build.log 2>&1; then
+            grep -v '^\[' "out/gpu-build.log" | tail -40 >&2
+            echo "Provider build failed: order1886_$provider (full log: out/gpu-build.log)" >&2; exit 1
+        fi
+        cp "out/$provider-provider/order1886_$provider.dll" out/
+    done
+    echo "Providers built: out/order1886_fsr3.dll out/order1886_fsr4.dll"
     if [[ ${1:-} == --test ]]; then
         tests=(runtime sema runtime-keys event-flag memory-hooks memory-read-backing memory-ownership memory-output-publication services content
                order-render-baseline srt-descriptor-validation pad pad-map frame-trace

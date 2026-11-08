@@ -2,6 +2,12 @@ param(
     [Parameter(Mandatory=$true)][string]$Runtime,
     [string]$DependencyRoot = 'C:/msys64/clang64/bin',
     [string]$Python = 'python',
+    # Folder holding the FSR 4 v07 bundle (the platform-neutral bin/fsr4 contents: .spv,
+    # weights, manifests, LICENSE-FSR4-v07.txt). Empty skips FSR 4; the runtime then keeps
+    # its documented "asset bundle not found" fallback to the game's own resolve/FSR 3.1.
+    [string]$Fsr4Assets = '',
+    # Version stamp for the zip name (v0.2.18...). Empty writes an unversioned zip.
+    [string]$PackageVersion = '',
     [switch]$SkipFrontendBuild,
     [switch]$SkipDependencyInstall
 )
@@ -48,6 +54,9 @@ function Copy-RuntimeDependencies([string]$Executable, [string]$Target, [string]
 }
 
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
+# Resolve the asset folder now: inside the launcher-go Push-Location below, a relative
+# path would resolve against the wrong directory.
+$fsr4AssetsPath = if ($Fsr4Assets) { (Resolve-Path -LiteralPath $Fsr4Assets).Path } else { '' }
 $runtimePath = (Resolve-Path -LiteralPath $Runtime).Path
 $runtimeIdentityPath = Join-Path (Split-Path -Parent $runtimePath) 'runtime-build.json'
 if (-not (Test-Path -LiteralPath $runtimeIdentityPath)) {
@@ -92,6 +101,37 @@ try {
         throw 'order1886_fsr3.dll is missing next to the runtime; build it with build.sh first.'
     }
     Copy-Item -LiteralPath $provider -Destination (Join-Path $runtimeBin 'order1886_fsr3.dll')
+    # FSR 4 v07 provider + its platform-neutral asset bundle (the fork's #12 work, now on
+    # Windows). The provider imports only libc++ and the Vulkan loader, like fsr3. When
+    # -Fsr4Assets is empty the package ships without FSR 4 and the runtime says so in the
+    # log; FSR 3.1 stays the automatic fallback.
+    $provider4 = Join-Path (Split-Path -Parent $runtimePath) 'order1886_fsr4.dll'
+    if (-not (Test-Path -LiteralPath $provider4)) {
+        throw 'order1886_fsr4.dll is missing next to the runtime; build it with build.sh first.'
+    }
+    Copy-Item -LiteralPath $provider4 -Destination (Join-Path $runtimeBin 'order1886_fsr4.dll')
+    if ($fsr4AssetsPath) {
+        $bundleSrc = $fsr4AssetsPath
+        foreach ($required in @('LICENSE-FSR4-v07.txt', 'rcas.spv', 'spd_auto_exposure.spv')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $bundleSrc $required))) {
+                throw "The FSR 4 asset folder lacks $required (bundle incomplete: $bundleSrc)"
+            }
+        }
+        if (-not (Get-ChildItem -LiteralPath $bundleSrc -Filter '*_shader_manifest.json' -File)) {
+            throw "The FSR 4 asset folder has no *_shader_manifest.json (bundle incomplete: $bundleSrc)"
+        }
+        $bundleDst = Join-Path $runtimeBin 'fsr4'
+        New-Item -ItemType Directory -Force -Path $bundleDst | Out-Null
+        Copy-Item -LiteralPath (Join-Path $bundleSrc '*') -Destination $bundleDst -Recurse -Force
+    } else {
+        Write-Warning 'No -Fsr4Assets folder: the package ships without the FSR 4 v07 bundle (FSR 3.1 fallback only).'
+    }
+    # Launcher music, when the release repo stages it beside this script (optional; the
+    # launcher plays silently without a music/ folder).
+    $music = Join-Path $projectRoot 'music'
+    if (Test-Path -LiteralPath $music) {
+        Copy-Item -LiteralPath $music -Destination (Join-Path $destination 'music') -Recurse -Force
+    }
     # NVIDIA DLAA (#11): the MSVC-built bridge and NVIDIA's runtime, when gpu/dlss_bridge/build.ps1
     # staged them beside the runtime. Both or neither: the bridge cannot work without the runtime.
     $runtimeDir = Split-Path -Parent $runtimePath
@@ -200,4 +240,15 @@ $manifest | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $dest
 & $buildPython "$projectRoot/packaging/windows/order1886-go-smoke.py" $destination
 if ($LASTEXITCODE) { throw 'Go portable smoke failed; the incomplete marker remains.' }
 Remove-Item -LiteralPath $incomplete
+
+# The distributable: a zip whose root folder is "The Order 1886", plus its SHA-256 in
+# the GNU two-space format, matching the Linux tarball's release convention.
+$suffix = if ($PackageVersion) { "-$PackageVersion" } else { '' }
+$zip = Join-Path $stage "order1886-win-x86_64$suffix.zip"
+if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip }
+Compress-Archive -LiteralPath $destination -DestinationPath $zip
+$zipHash = Get-SHA256 $zip
+"$zipHash  $(Split-Path -Leaf $zip)" | Set-Content -LiteralPath "$zip.sha256" -Encoding ascii
+Write-Output "zip: $zip"
+Write-Output "sha256: $zipHash"
 Write-Output $destination

@@ -188,13 +188,13 @@ if (WIN32)
     target_compile_options(atrac9 PRIVATE -w)
     set_target_properties(atrac9 PROPERTIES C_STANDARD 99 INTERPROCEDURAL_OPTIMIZATION OFF)
     add_executable(order1886-runtime ../src/probe.c ${PS4_RUNTIME} ../src/compat_win.c ../src/cpu_check.c ../src/vulkan_smoke.c
-        ../src/isa_rewrite.c ../src/isa_emulate.c
+        ../src/isa_rewrite.c ../src/isa_emulate.c ../src/pad_diag_windows.c
         ../packaging/windows/order1886-runtime.rc)
     set_target_properties(order1886-runtime PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF)
     target_compile_definitions(order1886-runtime PRIVATE ORDER1886_RUNTIME=1)
     target_compile_options(order1886-runtime PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror>)
     target_include_directories(order1886-runtime PRIVATE .. ../src)
-    target_link_libraries(order1886-runtime PRIVATE ps4gpu atrac9 onecore bcrypt ws2_32 -pthread)
+    target_link_libraries(order1886-runtime PRIVATE ps4gpu atrac9 onecore bcrypt ws2_32 setupapi -pthread)
     # The PS4 range (64 GiB - 1 TiB) must stay free: no high-entropy ASLR for heaps and stacks.
     # The guest main thread runs on the process stack: 16 MiB, committed (no stack probes).
     target_link_options(order1886-runtime PRIVATE -Wl,--disable-high-entropy-va "SHELL:-Xlinker --stack -Xlinker 16777216,16777216")
