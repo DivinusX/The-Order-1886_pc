@@ -1,5 +1,8 @@
 The Order: 1886 PC compatibility project
 
+Main Maintainer: DivinusX (https://github.com/DivinusX) — owns this fork, runs the
+hardware verification, ships the releases, and funds the work.
+
 This project reuses infrastructure from FelipePrado0/gow3_pc
 (https://github.com/FelipePrado0/gow3_pc), licensed under GPL-2.0-or-later.
 It includes components derived from shadPS4
