@@ -2,6 +2,7 @@
 from pathlib import Path
 import io
 import json
+import os
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -192,7 +193,8 @@ class WorkerTests(unittest.TestCase):
 
     def test_bundled_worker_discovers_runtime_at_installation_root(self):
         installation = self.root / "portable"
-        runtime = installation / "bin" / "order1886-runtime.exe"
+        # find_runtime looks for the platform spelling; the fixture must use it too.
+        runtime = installation / "bin" / ("order1886-runtime.exe" if os.name == "nt" else "order1886-runtime")
         runtime.parent.mkdir(parents=True)
         runtime.touch()
         previous = worker.order1886.INSTALL_ROOT

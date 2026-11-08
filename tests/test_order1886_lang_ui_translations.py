@@ -112,11 +112,16 @@ class CatalogueWiringTests(unittest.TestCase):
                     self.assertEqual(lang.translate(key, locale), value)
 
     def test_untranslated_reports_only_the_keys_that_are_still_english(self):
+        from launcher.order1886_lang_data import KEYS
         for locale, texts in UI_TRANSLATIONS.items():
             with self.subTest(locale=locale):
-                still_english = sorted(set(UI_KEYS) - set(texts))
+                # A UI key can also be translated through the base Tk catalogue (KEYS), but
+                # only counts as translated when that base value really differs from English
+                # (`Performance` equals English in pt/fr/it). untranslated() reports exactly
+                # the keys that resolve to English.
+                base_translated = {key for key in KEYS if lang.table(locale)[key] != key}
+                still_english = sorted(set(UI_KEYS) - set(texts) - base_translated)
                 self.assertEqual(lang.untranslated(locale), still_english)
-                self.assertEqual(len(lang.untranslated(locale)), len(UI_KEYS) - len(texts))
                 self.assertLess(len(lang.untranslated(locale)), len(UI_KEYS))
         self.assertEqual(lang.untranslated("en"), [])
 

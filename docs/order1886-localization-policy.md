@@ -64,8 +64,9 @@ else stays English until a person who speaks the language owns the wording.
 - **Ambiguous one-word labels** (`Framing`, `Native`). Both could be read as composition
   or as a resolution claim, and a wrong guess is worse than English.
 
-75 of the 304 UI keys are translated. The remaining 229 are English in all twelve
-non-English languages on purpose, and their reasons are the classes above.
+90 of the 335 UI keys are translated: 75 from the UI table plus 15 shared with the base
+Tk catalogue. The remaining 245 are English in all twelve non-English languages on
+purpose, and their reasons are the classes above.
 
 ## The translated keys
 

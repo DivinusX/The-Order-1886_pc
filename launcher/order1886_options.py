@@ -78,6 +78,22 @@ field("sharpness", "Sharpening", "graphics", "number", 0,
 field("anisotropy", "Anisotropic filtering", "graphics", "select", 1,
       "Raises filtering to at least this level on filtered, mipmapped textures; depth and point-sampled textures keep the game's own sampling. Applies on next launch; visual qualification is pending.",
       [(x, "Game default" if x == 1 else str(x) + "×", "") for x in (1, 2, 4, 8, 16)])
+# Sun-shadow chain (theorder1886-port#26): the EVSM sun conversion reads the cascade maps'
+# HTILE mask (expand) and its CPU readback must not stall the queue (sync mode). Both default
+# to the stable combination verified on RX 9070 XT; the choices exist to A/B a report.
+field("sun_sync", "Sun shadow readback sync", "graphics", "select", 1,
+      "The Chase's every-other-frame sun flicker came from the synchronous drain answering the "
+      "sun copy's CPU read mid-frame with half-updated depth. Staging (default) snapshots the "
+      "ranges at the copy dispatch and serves the newest completed batch without a stall. "
+      "Synchronous drain is the old behaviour, Off skips the sync entirely; both can flicker.",
+      [(1, "Staging — recommended", ""),
+       (2, "Synchronous drain — legacy", "Drains the GPU mid-frame; the v0.2.9 flicker source."),
+       (0, "Off", "Sun reads race the GPU; shadows and specular may flicker.")])
+field("htile_expand", "HTILE draw expand", "graphics", "boolean", True,
+      "Fills the depth surfaces' HTILE mask with the uncompressed value when a pass clears and "
+      "writes depth, so the sun's EVSM compute reads caster geometry instead of the cleared "
+      "state. Off restores the v0.2.15 behaviour (sun shadows and wet-surface specular can "
+      "vanish, theorder1886-port#26); turn it off only to A/B a report.")
 # Each switch edits the prepared copy of the executable (scripts/order1886_post_effects.py) so the
 # game takes its own path for a lens without that effect. There is no model-detail switch: the
 # only level-of-detail control found in the executable is a frame-capture flag with no located
