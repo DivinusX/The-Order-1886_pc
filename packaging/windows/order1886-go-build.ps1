@@ -77,8 +77,18 @@ $incomplete = Join-Path $destination 'GO-BUILD-INCOMPLETE.txt'
 'This Go preview is incomplete until packaging and smoke checks finish.' | Set-Content -LiteralPath $incomplete -Encoding UTF8
 Push-Location (Join-Path $projectRoot 'launcher-go')
 try {
+    # The fork's launcher UI is launcher-go/order1886-frontend (static dist, vendored from
+    # the release repo); upstream frontend/src is the retired sidebar UI and must never be
+    # npm-built into dist. Stage the fork frontend, then build with -s (skip frontend
+    # build), exactly as launcher-go-overlay/README.md prescribes.
+    $forkFrontend = Join-Path $projectRoot 'launcher-go/order1886-frontend'
+    if (-not $SkipFrontendBuild -and (Test-Path -LiteralPath $forkFrontend)) {
+        $dist = Join-Path $projectRoot 'launcher-go/frontend/dist'
+        if (Test-Path -LiteralPath $dist) { Remove-Item -Recurse -Force -LiteralPath $dist }
+        Copy-Item -LiteralPath $forkFrontend -Destination $dist -Recurse
+    }
     if (-not $SkipFrontendBuild) {
-        & go run github.com/wailsapp/wails/v2/cmd/wails@v2.17.0 build -clean -skipbindings
+        & go run github.com/wailsapp/wails/v2/cmd/wails@v2.17.0 build -clean -skipbindings -s
         if ($LASTEXITCODE) { throw 'Go launcher build failed.' }
     }
     $goLauncher = Join-Path $projectRoot 'launcher-go/build/bin/The Order 1886.exe'
