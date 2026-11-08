@@ -12,12 +12,11 @@ PAGES = [
     {"id": "system", "title": "System"},
 ]
 # The game's temporal inputs are mapped and a provider replaces its temporal resolve (#7, #10);
-# these choices wait for their own providers to be built and qualified.
-DLSS_LINUX = ("The Linux runtime does not load upscaler providers yet, so the game's own temporal "
-              "anti-aliasing stays (#11).")
-FSR4 = "The FSR 4 provider is not built into this package yet (#12)."
-FSR3_LINUX = ("The Linux runtime does not load upscaler providers yet, so the game's own temporal "
-              "anti-aliasing stays (#10).")
+# FSR 3.1 and FSR 4 run their own providers built from this tree on every platform.
+DLSS_LINUX = ("The Linux runtime has no NVIDIA DLSS bridge: DLAA needs the Windows vendor "
+              "runtime and an RTX GPU (#11).")
+FSR4 = ""
+FSR3_LINUX = ""
 NATIVE_ONLY = ("Every provider renders at the game's own size for now; lower render sizes need "
                "render-target scaling (#3).")
 RENDERER = "This setting is not exposed by the validated Order launch profile yet; backend wiring and qualification are pending."

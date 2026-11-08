@@ -18,10 +18,6 @@ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/fsr-vulkan"
                  "${CMAKE_CURRENT_BINARY_DIR}/fidelityfx" EXCLUDE_FROM_ALL)
 set_target_properties(ffx_vulkan_portable ffx_vulkan_fsr3_vk_backend_1_1_4
                       ffx_vulkan_fsr3_host_1_1_4 PROPERTIES POSITION_INDEPENDENT_CODE ON)
-if(NOT MSVC)
-    # SDK vk.cpp uses std::lock_guard through an MSVC-only transitive include.
-    target_compile_options(ffx_vulkan_fsr3_vk_backend_1_1_4 PRIVATE -include mutex)
-endif()
 
 add_library(order1886_fsr3 SHARED order1886_fsr3.cpp)
 target_compile_features(order1886_fsr3 PRIVATE cxx_std_17)

@@ -13,6 +13,9 @@
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#else
+#include <dlfcn.h>
+#include <unistd.h>
 #endif
 
 namespace Vulkan {
@@ -29,9 +32,16 @@ std::filesystem::path RuntimeDirectory() {
 #endif
 }
 
+#ifdef _WIN32
+#define ORDER1886_PROVIDER_SUFFIX ".dll"
+#else
+#define ORDER1886_PROVIDER_SUFFIX ".so"
+#endif
+
 std::vector<UpscaleProvider>& Providers() {
     static std::vector<UpscaleProvider> list{
-        {.key = "fsr3", .library = "order1886_fsr3.dll", .symbol = "order1886_fsr_get_api"},
+        {.key = "fsr3", .library = "order1886_fsr3" ORDER1886_PROVIDER_SUFFIX, .symbol = "order1886_fsr_get_api"},
+        {.key = "fsr4", .library = "order1886_fsr4" ORDER1886_PROVIDER_SUFFIX, .symbol = "order1886_fsr_get_api"},
         {.key = "dlss", .library = "order1886_dlss.dll", .symbol = "order1886_dlss_get_api"},
     };
     return list;
@@ -72,8 +82,50 @@ bool Load(UpscaleProvider& provider) {
     provider.loaded = true;
     return true;
 #else
-    provider.reason = "providers are Windows DLLs";
-    return false;
+    std::vector<std::filesystem::path> candidates;
+    std::vector<char> buf(4096);
+    const ssize_t length = ::readlink("/proc/self/exe", buf.data(), buf.size() - 1);
+    if (length > 0) {
+        buf[static_cast<size_t>(length)] = '\0';
+        const auto dir = std::filesystem::path(buf.data()).parent_path();
+        candidates.push_back(dir / provider.library);            // bin/, beside the runtime
+        candidates.push_back(dir / "gpu" / provider.library);    // bin/gpu/ packaging layout
+    }
+    candidates.push_back(RuntimeDirectory() / provider.library); // the launcher's cwd layout
+    void* module = nullptr;
+    std::string load_error;
+    for (const auto& candidate : candidates) {
+        if (!std::filesystem::exists(candidate)) {
+            continue;
+        }
+        module = ::dlopen(candidate.c_str(), RTLD_NOW | RTLD_LOCAL);
+        if (module) {
+            break;
+        }
+        if (const char* error = ::dlerror()) {
+            load_error = error;
+        }
+    }
+    if (!module) {
+        provider.reason = std::string(provider.library) +
+            (load_error.empty() ? " is not next to the runtime" : " failed to load: " + load_error);
+        return false;
+    }
+    const auto get_api = reinterpret_cast<OrderUpscaleGetApi>(
+        reinterpret_cast<void*>(::dlsym(module, provider.symbol)));
+    if (!get_api) {
+        provider.reason = std::string(provider.library) + " does not export " + provider.symbol;
+        return false;
+    }
+    if (get_api(ORDER1886_UPSCALE_ABI, &provider.api) != ORDER_UPSCALE_OK ||
+        provider.api.abi_version != ORDER1886_UPSCALE_ABI) {
+        provider.reason = "provider does not implement ABI " + std::to_string(ORDER1886_UPSCALE_ABI);
+        return false;
+    }
+    provider.name = provider.api.name ? provider.api.name : provider.key;
+    provider.version = provider.api.version ? provider.api.version : "";
+    provider.loaded = true;
+    return true;
 #endif
 }
 
