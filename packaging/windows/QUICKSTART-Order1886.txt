@@ -24,7 +24,7 @@ BEFORE STARTING
   C:\Games\The Order 1886\
   Do not run the EXE from inside the ZIP. Keep both EXEs and bin together.
 - GitHub's "Source code" archives are for developers; download
-  order1886-go-windows.zip.
+  order1886-win-x86_64-<version>.zip from the Releases page.
 
 YOUR GAME FOLDER
 
@@ -49,8 +49,9 @@ FIRST SESSION
 1. Open The Order 1886.exe.
 2. On Game & Content, choose your game folder.
 3. On Performance, start with 30 FPS (60 FPS is also offered).
-4. On Graphics, choose a display mode and upscaling: FSR 1, AMD FSR 3.1 or,
-   on GeForce RTX, NVIDIA DLAA.
+4. On Graphics, choose a display mode and upscaling: FSR 1, AMD FSR 3.1,
+   AMD FSR 4 (v07 model; falls back to 3.1 automatically when the GPU cannot run
+   its shaders) or, on GeForce RTX, NVIDIA DLAA.
 5. Press Play. The first start prepares the game and compiles shaders, which
    takes a while; later starts are faster.
 6. Quit from the game window or with Stop. Do not interrupt a save.
@@ -59,7 +60,9 @@ LAUNCHER PAGES
 
 Home: Play, the launch configuration and the game installation check.
 Graphics: display mode, framing, upscaling, VSync, output resolution,
-  sharpening, anisotropy and the four post effects.
+  sharpening, anisotropy, the four post effects, and the two sun-shadow switches
+  (readback sync - keep Staging - and HTILE draw expand - keep on) that end the
+  sun flicker and restore outdoor shadows.
 Performance: 30/60/90 FPS and Unlocked, presentation cap, in-game menu and
   overlay items.
 Controls: mouse camera, sensitivity, inverted Y and keyboard bindings.
@@ -98,6 +101,13 @@ System > Updates checks GitHub releases and installs a verified package; the
 previous version can be restored. To update by hand, close everything, extract
 the new ZIP to a new folder and copy your user folder beside the new EXE.
 
+WINDOWS PORT STATUS
+
+This Windows package ships the same fixes as the Linux release (FSR 4, the
+sun-shadow staging readback sync, the HTILE expand). See WINDOWS.md in this
+folder for the port's requirements, troubleshooting and full list of items
+still awaiting a hardware pass.
+
 WHAT IS NOT VERIFIED YET
 
 Gameplay has been tested in parts of the campaign, not all of it. Full
@@ -121,13 +131,14 @@ Include last-run.json, the session log, the game version, GPU and driver,
 your settings and the steps to reproduce. Remove personal paths from logs.
 Do not upload game files or saves.
 
-Releases: https://github.com/JulioCacko/The-Order-1886_pc/releases
-Support:  https://github.com/JulioCacko/The-Order-1886_pc/issues
-Source:   https://github.com/JulioCacko/The-Order-1886_pc
+Releases: https://github.com/DivinusX/a-port-of-the-order-1886-thats-actually-alive/releases
+Support:  https://github.com/DivinusX/a-port-of-the-order-1886-thats-actually-alive/issues
+Source:   https://github.com/DivinusX/a-port-of-the-order-1886-thats-actually-alive
+          (upstream: https://github.com/JulioCacko/The-Order-1886_pc)
 
 Each release has a SHA-256 file. In PowerShell:
-  Get-FileHash .\order1886-go-windows.zip -Algorithm SHA256
-Compare it with order1886-go-windows.zip.sha256 from the same release.
+  Get-FileHash .\order1886-win-x86_64-<version>.zip -Algorithm SHA256
+Compare it with the .zip.sha256 from the same release.
 
 Code license: GPL-2.0-or-later; see LICENSE and notices. Game images and
 trademarks belong to their owners. No affiliation with or endorsement by
@@ -147,14 +158,16 @@ CUSA00070, CUSA00100, CUSA00670 e CUSA00785 experimentais).
 
 COMO INICIAR
 
-1. Baixe order1886-go-windows.zip em Releases, nao os arquivos "Source code".
+1. Baixe order1886-win-x86_64-<versao>.zip em Releases, nao os arquivos "Source code".
 2. Extraia o ZIP inteiro para uma pasta com permissao de escrita. Nao abra o
    EXE dentro do ZIP. Mantenha os dois EXEs e a pasta bin juntos.
 3. Abra The Order 1886.exe. Em Game & Content, escolha a pasta que contem
    diretamente eboot.bin, archivemap.bin, _data, sce_sys e sce_module.
    Um PKG criptografado ou apenas o eboot.bin nao sao suficientes.
 4. Em Performance, comece com 30 FPS. Em Graphics, escolha o modo de tela e o
-   upscaling: FSR 1, AMD FSR 3.1 ou, em GeForce RTX, NVIDIA DLAA.
+   upscaling: FSR 1, AMD FSR 3.1, AMD FSR 4 (modelo v07; volta ao 3.1
+   automaticamente se a GPU nao rodar seus shaders) ou, em GeForce RTX, NVIDIA DLAA.
+   Deixe o Sun shadow readback sync em Staging e o HTILE draw expand ligado.
 5. Clique Play. A primeira vez prepara o jogo e compila shaders e demora mais.
 
 NO JOGO
