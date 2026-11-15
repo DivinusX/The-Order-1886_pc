@@ -221,7 +221,8 @@ def main() -> None:
 
     files = []
     for path in sorted(destination.rglob('*')):
-        if path.is_file() and path.name != 'package-manifest.json':
+        # The incomplete marker is removed after the smoke test, so it must not be listed.
+        if path.is_file() and path.name not in ('package-manifest.json', incomplete.name):
             files.append({'path': str(path.relative_to(destination)), 'sha256': sha256(path)})
     manifest = {
         'product': 'The Order: 1886',
