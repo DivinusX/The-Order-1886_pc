@@ -159,12 +159,35 @@ def main() -> None:
         (destination / name).chmod(0o755)
     shutil.copy2(launcher, destination / 'bin/order1886-launcher')
     (destination / 'bin/order1886-launcher').chmod(0o755)
-    shutil.copy2(runtime, destination / 'bin/order1886-runtime')
-    (destination / 'bin/order1886-runtime').chmod(0o755)
+    # The shipped `bin/order1886-runtime` is the pad-check wrapper (one-shot gamepad diagnostics
+    # on a real boot, a plain exec for the launcher's --runtime-info/--gamepad probes) and the
+    # ELF is `order1886-runtime.bin` beside it, which the wrapper execs. Without the wrapper file
+    # the ELF ships under the plain name, as upstream does.
+    wrapper = project / 'packaging/linux/order1886-runtime-wrapper.sh'
+    runtime_elf = destination / ('bin/order1886-runtime.bin' if wrapper.is_file() else 'bin/order1886-runtime')
+    shutil.copy2(runtime, runtime_elf)
+    runtime_elf.chmod(0o755)
+    if wrapper.is_file():
+        shutil.copy2(wrapper, destination / 'bin/order1886-runtime')
+        (destination / 'bin/order1886-runtime').chmod(0o755)
+    # The upscaler providers are loaded by the runtime from its own folder (vk_upscale_providers.cpp);
+    # build.sh leaves them beside the runtime. FSR 3.1 is the fallback every GPU can run, so it is
+    # required; the FSR 4 provider is optional (its v07 asset bundle is staged by the release step).
+    providers = []
+    for name in ('order1886_fsr3.so', 'order1886_fsr4.so'):
+        source = runtime.parent / name
+        if source.is_file():
+            shutil.copy2(source, destination / 'bin' / name)
+            (destination / 'bin' / name).chmod(0o755)
+            providers.append(destination / 'bin' / name)
+        elif name == 'order1886_fsr3.so':
+            fail(f'{name} is missing next to the runtime; build it with build.sh first.')
+        else:
+            print(f'Warning: {name} is not next to the runtime; the package ships FSR 3.1 only.', flush=True)
     (destination / 'bin/gpu').mkdir()
     shutil.copy2(gpu, destination / 'bin/gpu/libps4gpu.so')
     # The runtime stays byte-identical to its receipt; its RUNPATH already starts with $ORIGIN/gpu.
-    bundled = bundle_libraries([destination / 'bin/order1886-runtime', destination / 'bin/gpu/libps4gpu.so'],
+    bundled = bundle_libraries([runtime_elf, destination / 'bin/gpu/libps4gpu.so', *providers],
                                destination / 'bin/gpu')
     print(f'Bundled {len(bundled)} libraries: {", ".join(bundled)}', flush=True)
     shutil.copy2(identity_path, destination / 'bin/runtime-build.json')

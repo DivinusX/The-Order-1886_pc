@@ -44,8 +44,17 @@ def main() -> None:
         if hashlib.file_digest(path.open('rb'), 'sha256').hexdigest() != entry['sha256']:
             raise SystemExit('Package hash mismatch: ' + entry['path'])
 
+    # The pad-check wrapper ships as bin/order1886-runtime with the ELF beside it as
+    # order1886-runtime.bin (packaging/linux/order1886-runtime-wrapper.sh); without the wrapper the
+    # ELF carries the plain name.
+    runtime_elf = package / 'bin/order1886-runtime.bin'
+    if runtime_elf.is_file():
+        if not os.access(package / 'bin/order1886-runtime', os.X_OK):
+            raise SystemExit('The runtime wrapper bin/order1886-runtime is not executable.')
+    else:
+        runtime_elf = package / 'bin/order1886-runtime'
     for relative in ('The Order 1886', 'Play The Order 1886', 'bin/order1886-launcher',
-                     'bin/order1886-runtime', 'bin/gpu/libps4gpu.so'):
+                     str(runtime_elf.relative_to(package)), 'bin/order1886_fsr3.so', 'bin/gpu/libps4gpu.so'):
         path = package / relative
         if not path.is_file():
             raise SystemExit('Missing packaged file: ' + relative)
@@ -68,7 +77,7 @@ def main() -> None:
     bundled = {path.name for path in gpu.iterdir()} - {'libps4gpu.so'}
     if not bundled:
         raise SystemExit('No libraries were bundled beside the GPU library.')
-    for binary in (package / 'bin/order1886-runtime', gpu / 'libps4gpu.so'):
+    for binary in (runtime_elf, gpu / 'libps4gpu.so'):
         # Their own dependencies must come from the package. A library the system stack loads first
         # (libnuma through a system driver, say) may resolve outside it, which is harmless.
         dynamic = subprocess.run(['readelf', '-d', str(binary)], capture_output=True, text=True,
