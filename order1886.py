@@ -208,6 +208,7 @@ def prepare_game(game, out, frame_rate=30, aspect_ratio='original', patches=(), 
         raise ValueError('Prepared images must be stored outside the game folder.')
     # Refuse an unusable selection before any work: a recipe is bound to this build.
     selected_patches = patch_catalogue.select(patches, metadata)
+    language_profile = patch_catalogue.language_profile(metadata)
     profile = timing.validate_source(game / 'eboot.bin', frame_rate, metadata)
     display_profile = display.validate_source(game / 'eboot.bin', aspect_ratio, metadata)
     effects_profile = post_effects.validate_source(game / 'eboot.bin', disabled_effects, metadata)
@@ -223,7 +224,8 @@ def prepare_game(game, out, frame_rate=30, aspect_ratio='original', patches=(), 
                        disabled_effects=effects_profile['disabled'],
                        post_effects_recipe_sha256=effects_profile['recipe_sha256'],
                        resolution_recipe_sha256=resolution_profile['recipe_sha256'],
-                       patches=patch_catalogue.patch_fingerprint(selected_patches))
+                       patches=patch_catalogue.patch_fingerprint(selected_patches),
+                       language_recipe_sha256=language_profile['recipe_sha256'])
     manifest = out / 'prepared.json'
     try:
         previous = json.loads(manifest.read_text(encoding='utf-8'))
@@ -250,6 +252,8 @@ def prepare_game(game, out, frame_rate=30, aspect_ratio='original', patches=(), 
     # Catalogued recipes edit the derived image, never the guest executable; the fingerprint
     # already binds that image to the eboot.bin hash it was produced from.
     applied_patches = patch_catalogue.apply_to_prepared(out / 'boot.bin', selected_patches, metadata)
+    # The game language reaches the executable unfiltered (SKU 0 jump-table entry); best effort.
+    language_profile = patch_catalogue.apply_language(out / 'boot.bin', language_profile, metadata)
     link_modules.link(game, out)
     result = {'game': str(game), 'title_id': metadata['TITLE_ID'], 'inputs': fingerprint,
               'frame_rate_profile': profile,
@@ -257,6 +261,7 @@ def prepare_game(game, out, frame_rate=30, aspect_ratio='original', patches=(), 
               'post_effects_profile': effects_profile,
               'resolution_profile': resolution_profile,
               'catalogue_patches': applied_patches,
+              'language_profile': language_profile,
               'image_sha256': sha256(image), 'status': 'prepared; gameplay unverified'}
     write_json(manifest, result)
     return result
@@ -942,6 +947,7 @@ def main(argv=None):
                        'frame_rate_profile': prepared.get('frame_rate_profile'),
                        'display_profile': prepared.get('display_profile'),
                        'post_effects_profile': prepared.get('post_effects_profile'),
+                       'language_profile': prepared.get('language_profile'),
                        'configuration': {
                            'timing': timing_values,
                            'catalogue_patches': prepared.get('catalogue_patches', []),

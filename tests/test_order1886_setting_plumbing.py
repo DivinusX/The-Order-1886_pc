@@ -30,7 +30,7 @@ PLUMBING = {
     'mouse_invert_y': ('--mouse-invert-y', 1, 0, 'value'),
     'button_prompts': ('--button-prompts', 'xbox', 'playstation', 'value'),
     'htile_unqualified': ('--htile', True, False, 'switch'),
-    'in_game_menu': ('--in-game-menu', True, False, 'switch'),
+    'game_menu': ('--in-game-menu', True, False, 'switch'),
     'synchronous_recording': ('--synchronous-recording', True, False, 'switch'),
     'texture_update_locking': ('--texture-update-locking', True, False, 'switch'),
 }
@@ -41,7 +41,7 @@ def values(**overrides):
             'frame_rate': 30, 'aspect_ratio': 'original', 'mouse_look': True,
             'mouse_sensitivity': 100, 'mouse_invert_y': False, 'readbacks': 'relaxed',
             'performance_capture': False, 'fps_cap': 120, 'htile_unqualified': False,
-            'in_game_menu': False, 'synchronous_recording': False,
+            'game_menu': False, 'synchronous_recording': False,
             'texture_update_locking': False}
     base.update(overrides)
     return base

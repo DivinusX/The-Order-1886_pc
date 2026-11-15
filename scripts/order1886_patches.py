@@ -65,6 +65,24 @@ RECIPES = (
     },
 )
 
+# Game language (#21). Without a -sku argument the executable starts as SKU 0 and filters the
+# translated system language (table 0xf13370) down to US English, Korean and Chinese
+# (0xa81687), so every other language became English. This edit points the SKU 0 entry of the
+# SKU jump table (0xa81b00) at the store SKU 3 already uses (0xa81698): the system language
+# the launcher selects reaches the game unfiltered. Always applied, never listed.
+LANGUAGE_TABLE_RVA = 0xa81b00
+LANGUAGE = {
+    'id': 'system-language-unfiltered',
+    'title': 'Game language follows the selected system language',
+    'description': 'Removes the SKU 0 language filter so the selected game language applies.',
+    'title_ids': editions.TITLE_IDS,
+    'guest_executable': 'eboot.bin',
+    'image': IMAGE_KIND,
+    'edits': ({'offset': LANGUAGE_TABLE_RVA,
+               'expected': bytes.fromhex('87fbffff'),
+               'replacement': bytes.fromhex('98fbffff')},),
+}
+
 
 def recipe(identifier):
     """The catalogued recipe with this id; an unknown id is an error, not a default."""
@@ -260,6 +278,33 @@ def select(identifiers, metadata):
             raise ValueError(f'{identifier}: {error}')
         chosen.append(item)
     return tuple(chosen)
+
+
+def language_profile(metadata):
+    """The always-on language recipe, as preparation records it before applying it."""
+    return {'id': LANGUAGE['id'], 'recipe_sha256': recipe_sha256(LANGUAGE), 'applied': False,
+            'eligible': identity_error(LANGUAGE, metadata) is None}
+
+
+def apply_language(boot_path, profile, metadata):
+    """Apply the language recipe to a prepared image when the image carries its expected bytes.
+
+    Unlike a recipe the player selected, this one never fails a preparation: a build whose
+    bytes differ at the SKU table keeps its own language filter, and the profile says why
+    (`reason`), so the session report shows it. The table bytes were verified on APP_VER
+    01.02 of the listed editions.
+    """
+    profile = dict(profile)
+    if not profile.get('eligible'):
+        return {**profile, 'reason': 'the selected edition is not one this recipe was verified on'}
+    path = Path(boot_path)
+    if not path.is_file():
+        return {**profile, 'reason': 'no prepared image'}
+    try:
+        applied, = apply_to_prepared(path, [LANGUAGE], metadata)
+    except ValueError as error:
+        return {**profile, 'reason': str(error)}
+    return {**profile, 'applied': True, 'edits': applied['edits']}
 
 
 def apply_to_prepared(boot_path, recipes, metadata):

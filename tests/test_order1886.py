@@ -186,9 +186,9 @@ class OrderBackendTests(unittest.TestCase):
             return {'exit_code': 0, 'runtime_exit_code': 0, 'timed_out': False,
                     'stop_requested': False, 'forced_stop': False, 'elapsed_seconds': 0}
 
-        # Brazilian Portuguese (17) exists only in CUSA00785; other editions get Portugal's (7).
+        # No edition substitutes a language any more (the SKU 0 filter is removed at preparation).
         for title_id, choice, expected in (('CUSA00076', None, 1), ('CUSA00076', 8, 8), ('CUSA00076', 0, 0),
-                                           ('CUSA00076', 17, 7), ('CUSA00785', 17, 17)):
+                                           ('CUSA00076', 17, 17), ('CUSA00785', 17, 17)):
             self.metadata['TITLE_ID'] = title_id
             with self.subTest(title_id=title_id, choice=choice), \
                     patch.object(order1886, 'find_runtime', return_value=runtime), \

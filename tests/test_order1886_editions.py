@@ -23,13 +23,14 @@ class EditionTests(unittest.TestCase):
         self.assertFalse(editions.supported('CUSA00207'))
         self.assertFalse(editions.experimental('CUSA00207'))
 
-    def test_brazilian_portuguese_falls_back_only_where_it_is_missing(self):
-        self.assertEqual(editions.system_language('CUSA00785', 17), 17)
-        for title in ('CUSA00035', 'CUSA00070', 'CUSA00076'):
+    def test_no_language_is_substituted(self):
+        # The pt-BR -> pt-PT substitution rested on the executable's SKU 0 language filter,
+        # which preparation now removes (order1886_patches.LANGUAGE); the player picks either.
+        self.assertEqual(editions.LANGUAGE_FALLBACKS, {})
+        for title in ('CUSA00785', 'CUSA00035', 'CUSA00070', 'CUSA00076', 'CUSA00207'):
             with self.subTest(title=title):
-                self.assertEqual(editions.system_language(title, 17), 7)
+                self.assertEqual(editions.system_language(title, 17), 17)
                 self.assertEqual(editions.system_language(title, 1), 1)
-        self.assertEqual(editions.system_language('CUSA00207', 17), 17)
 
 
 if __name__ == '__main__':

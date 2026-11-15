@@ -61,11 +61,27 @@ def render_width(values: dict) -> int:
     return values.get("custom_render_width", 3200) if width == 0 else width
 
 
+def game_system_language(values: dict):
+    """The PS4 system-language ID the player picked, or None to follow the launcher language."""
+    from launcher.order1886_options import GAME_LANGUAGE_IDS
+    choice = values.get("game_language", "follow")
+    return GAME_LANGUAGE_IDS.get(choice) if isinstance(choice, str) else None
+
+
+def game_menu_enabled(values: dict) -> bool:
+    """The in-game menu (F1) follows game_menu, on by default; the old in_game_menu key is ignored."""
+    choice = values.get("game_menu", True)
+    return choice if isinstance(choice, bool) else True
+
+
 def backend_command(values: dict, mode: str = "play", state: Path = STATE,
                     stop_file: Path | None = None) -> list[str]:
     from order1886 import SYSTEM_LANGUAGES, inputs
     locale = values.get("ui_language", "en")
     language = SYSTEM_LANGUAGES.get(locale, 1) if isinstance(locale, str) else 1
+    chosen = game_system_language(values)
+    if chosen is not None:
+        language = chosen
     command = ([sys.executable, "--run-backend"] if FROZEN else
                [sys.executable, str(ROOT / "order1886.py")])
     command += ["--game-dir", values["game_dir"], "--state-dir", str(state),
@@ -93,7 +109,7 @@ def backend_command(values: dict, mode: str = "play", state: Path = STATE,
     # Live runtime switches stay off the command line unless the player asked for them.
     if values.get("htile_unqualified"):
         command += ["--htile"]
-    if values.get("in_game_menu"):
+    if game_menu_enabled(values):
         command += ["--in-game-menu"]
     if values.get("synchronous_recording"):
         command += ["--synchronous-recording"]
@@ -198,6 +214,7 @@ def session_worker(command: list[str], logfile: Path, events: EventSink,
 
 def load_launch_settings(state: Path, saved: dict | None = None) -> dict:
     """Use one set of defaults for the desktop and direct-play entry points."""
+    from launcher.order1886_options import GAME_LANGUAGE_IDS
     import order1886
     if saved is None:
         saved = read_settings(state / "settings.json")
@@ -225,7 +242,8 @@ def load_launch_settings(state: Path, saved: dict | None = None) -> dict:
         "synchronous_recording": bool(saved.get("synchronous_recording", False)),
         "texture_update_locking": bool(saved.get("texture_update_locking", False)),
         "fps_cap": saved.get("fps_cap", 120),
-        "in_game_menu": bool(saved.get("in_game_menu", False)),
+        "game_menu": game_menu_enabled(saved),
+        "game_language": saved.get("game_language", "follow"),
         "automatic_updates": bool(saved.get("automatic_updates", False)),
         "update_channel": saved.get("update_channel", "preview"),
         "mods_dir": saved.get("mods_dir", ""),
@@ -240,6 +258,7 @@ def load_launch_settings(state: Path, saved: dict | None = None) -> dict:
         ("presentation_filter", order1886.PRESENTATION_FILTERS, "fsr1"),
         ("aspect_ratio", ("original", "16:9"), "original"),
         ("button_prompts", ("playstation", "xbox", "keyboard"), "playstation"),
+        ("game_language", ("follow", *GAME_LANGUAGE_IDS), "follow"),
     ):
         if values[key] not in allowed:
             values[key] = default

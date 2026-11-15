@@ -6,9 +6,9 @@
 /* Tabs keep their natural width; the search box never squeezes them. */
 .tabs{flex:0 1 auto}
 /* Search collapses to a round icon and opens when focused, typed in, or with Ctrl+K. */
-.search{flex:0 0 34px;width:34px;min-width:34px;padding:0;justify-content:center;cursor:pointer;transition:flex-basis .18s ease-out,border-color .15s,background .15s}
+.search{flex:0 0 34px;width:34px;min-width:34px;gap:0;padding:0;justify-content:center;cursor:pointer;transition:flex-basis .18s ease-out,border-color .15s,background .15s}
 .search input{width:0;flex:0 0 0;cursor:pointer}
-.search:focus-within,.search:has(input:not(:placeholder-shown)){flex:0 1 230px;width:auto;min-width:170px;padding:0 12px;justify-content:flex-start}
+.search:focus-within,.search:has(input:not(:placeholder-shown)){flex:0 1 230px;width:auto;min-width:170px;padding:0 12px;justify-content:flex-start;gap:8px}
 .search:focus-within input,.search:has(input:not(:placeholder-shown)) input{flex:1 1 auto;width:100%;cursor:text}
 @media(max-width:1300px){.brand img{height:26px}}
 @media(max-width:1120px){.brand img{height:21px}.search{flex-basis:34px;min-width:34px;padding:0}.search:not(:focus-within) input{width:0}}
