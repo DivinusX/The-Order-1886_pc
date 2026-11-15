@@ -387,6 +387,22 @@ def runtime_process_environment(runtime, inherited=None):
     env = {k: v for k, v in source.items()
            if not k.upper().startswith('ORDER1886_') or k in DIAGNOSTIC_ENVIRONMENT}
     env['PATH'] = str(runtime.parent) + os.pathsep + env.get('PATH', '')
+    if os.name != 'nt' and getattr(sys, 'frozen', False):
+        # PyInstaller points LD_LIBRARY_PATH at the worker's own _internal/ folder, and every child
+        # inherits it. LD_LIBRARY_PATH beats RUNPATH, so the runtime would load the worker's copies
+        # of any library both carry, and the runtime wrapper's /bin/sh would load the worker's
+        # libreadline/libtinfo instead of the system's (bash 5.3 on a package built with readline
+        # 8.2: "symbol lookup error: rl_print_keybinding", exit 127). Hand the children the
+        # environment the player started the launcher with.
+        bundle = getattr(sys, '_MEIPASS', None)
+        if 'LD_LIBRARY_PATH_ORIG' in source:
+            env['LD_LIBRARY_PATH'] = source['LD_LIBRARY_PATH_ORIG']
+        elif bundle:
+            kept = [p for p in env.get('LD_LIBRARY_PATH', '').split(os.pathsep) if p and p != bundle]
+            env['LD_LIBRARY_PATH'] = os.pathsep.join(kept)
+        if not env.get('LD_LIBRARY_PATH'):
+            env.pop('LD_LIBRARY_PATH', None)
+        env.pop('LD_LIBRARY_PATH_ORIG', None)
     if os.name == 'nt' and not getattr(sys, 'frozen', False) and ROOT / 'out' in runtime.parents:
         dependencies = Path(source.get('MSYS2_ROOT', r'C:\msys64')) / 'clang64' / 'bin'
         if dependencies.is_dir():
