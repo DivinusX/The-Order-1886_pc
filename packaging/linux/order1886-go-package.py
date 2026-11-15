@@ -190,7 +190,14 @@ def main() -> None:
     bundled = bundle_libraries([runtime_elf, destination / 'bin/gpu/libps4gpu.so', *providers],
                                destination / 'bin/gpu')
     print(f'Bundled {len(bundled)} libraries: {", ".join(bundled)}', flush=True)
-    shutil.copy2(identity_path, destination / 'bin/runtime-build.json')
+    # The backend verifies the file it executes, bin/order1886-runtime, against the receipt's
+    # runtime_sha256. With the wrapper in that place the receipt names the wrapper's hash and keeps
+    # the ELF's under runtime_elf_sha256; the package manifest below says the same.
+    if wrapper.is_file():
+        identity = {**identity, 'runtime_elf_sha256': digest,
+                    'runtime_sha256': sha256(destination / 'bin/order1886-runtime')}
+        digest = identity['runtime_sha256']
+    (destination / 'bin/runtime-build.json').write_text(json.dumps(identity, indent=2) + '\n', encoding='utf-8')
     shutil.copytree(worker, destination / 'bin/order1886-worker')
     for entry in (destination / 'bin/order1886-worker').iterdir():
         if entry.is_file() and entry.read_bytes()[:4] == b'\x7fELF':
