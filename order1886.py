@@ -476,11 +476,11 @@ def runtime_environment(runtime, user, settings=None, inherited=None):
     # Cache work must never stop a launch, so failures are reported and dropped.
     try:
         import order1886_cache as shader_cache
-        if not getattr(sys, 'frozen', False):
-            shader_cache.prepare_cache_for_launch(user, log=lambda line: print(line))
-        else:
-            shader_cache.prepare_cache_for_launch(
-                user, INSTALL_ROOT.parent.parent, log=lambda line: print(line))
+        # INSTALL_ROOT is the package root: order1886_worker.main() normalises it to
+        # the onedir parent before running the backend, so a shipped seed bundle at
+        # <pkg>/shader-cache/<TITLE_ID>/ is found here. prepare_cache_for_launch also
+        # falls back to state.parent.parent when the root carries no bundle.
+        shader_cache.prepare_cache_for_launch(user, INSTALL_ROOT, log=lambda line: print(line))
     except Exception as error:  # noqa: BLE001
         print(f'order1886: shader cache setup skipped: {error}')
     render_width = resolution.validate_width(settings.get('render_width', resolution.NATIVE_WIDTH))
