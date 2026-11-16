@@ -469,6 +469,20 @@ def runtime_environment(runtime, user, settings=None, inherited=None):
         'ORDER1886_SETTINGS_MENU': '1' if in_game_menu else '0',
         'ORDER1886_STREAM_MEMORY': 'cached', 'PYTHONIOENCODING': 'utf-8',
     })
+    # Issue #17: keep the pipeline cache in the package (the engine falls back to
+    # the shared per-user directory when this one is missing), adopt any cache a
+    # pre-fix launcher left there, and import a shipped seed bundle so a fresh
+    # install replays pipelines at boot instead of compiling them mid-traversal.
+    # Cache work must never stop a launch, so failures are reported and dropped.
+    try:
+        import order1886_cache as shader_cache
+        if not getattr(sys, 'frozen', False):
+            shader_cache.prepare_cache_for_launch(user, log=lambda line: print(line))
+        else:
+            shader_cache.prepare_cache_for_launch(
+                user, INSTALL_ROOT.parent.parent, log=lambda line: print(line))
+    except Exception as error:  # noqa: BLE001
+        print(f'order1886: shader cache setup skipped: {error}')
     render_width = resolution.validate_width(settings.get('render_width', resolution.NATIVE_WIDTH))
     if render_width != resolution.NATIVE_WIDTH:
         # The render-target stack and the GPU heap that holds it grow with the frame.

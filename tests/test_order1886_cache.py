@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import shutil
 import stat
 import sys
 import tempfile
@@ -177,3 +178,78 @@ class ShaderCacheTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SeedBundleTests(unittest.TestCase):
+    """Issue #17: shipped seed bundles fill a fresh install's pipeline cache."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.install = Path(self.temp.name) / 'The Order 1886'
+        self.state = self.install / 'user' / 'order1886'
+        self.state.mkdir(parents=True)
+        self.source = (self.state / 'gpu' / order1886.SHADER_CACHE_ABI / 'cache'
+                       / order1886.TITLE_ID)
+
+    def seed(self, abi=None, files=None):
+        self.source.mkdir(parents=True, exist_ok=True)
+        for name, data in (files or {'g_0x1.key': b'key', '0x2_0.spv': b'spv',
+                                     'profile.bin': b'device',
+                                     'x_legacy.bin': b'driver'}).items():
+            (self.source / name).write_bytes(data)
+        bundle = self.install / 'shader-cache' / order1886.TITLE_ID
+        order1886_cache.export_shader_cache_seed(self.source, bundle, order1886.TITLE_ID,
+                                                 log=lambda *_: None)
+        if abi:
+            manifest = bundle / 'bundle.json'
+            manifest.write_text(manifest.read_text().replace(
+                order1886.SHADER_CACHE_ABI, abi), encoding='utf-8')
+        return bundle
+
+    def target(self):
+        return order1886_cache.title_cache_dir(self.state, order1886.TITLE_ID)
+
+    def test_export_ships_profile_but_not_driver_binaries(self):
+        bundle = self.seed()
+        self.assertTrue((bundle / 'blobs' / 'profile.bin').is_file())
+        self.assertFalse((bundle / 'blobs' / 'x_legacy.bin').exists())
+
+    def test_import_fills_a_fresh_cache(self):
+        self.seed()
+        shutil.rmtree(self.source)  # fresh install: nothing captured locally
+        receipts = order1886_cache.import_shader_cache_seeds(self.state, self.install,
+                                                             log=lambda *_: None)
+        self.assertEqual(receipts[0]['imported'], 3)
+        self.assertEqual((self.target() / 'g_0x1.key').read_bytes(), b'key')
+
+    def test_import_never_touches_a_cache_with_a_session(self):
+        self.seed()
+        (self.target() / 'profile.bin').parent.mkdir(parents=True, exist_ok=True)
+        (self.target() / 'profile.bin').write_bytes(b'this device')
+        receipts = order1886_cache.import_shader_cache_seeds(self.state, self.install,
+                                                             log=lambda *_: None)
+        self.assertEqual(receipts[0]['skipped'], 'cache already in use')
+        self.assertEqual((self.target() / 'profile.bin').read_bytes(), b'this device')
+
+    def test_tampered_bundle_is_refused_wholesale(self):
+        bundle = self.seed()
+        shutil.rmtree(self.source)
+        (bundle / 'blobs' / 'g_0x1.key').write_bytes(b'tampered')
+        receipts = order1886_cache.import_shader_cache_seeds(self.state, self.install,
+                                                             log=lambda *_: None)
+        self.assertIn('failed verification', receipts[0]['skipped'])
+        self.assertFalse(self.target().exists())
+
+    def test_abi_mismatch_is_refused(self):
+        self.seed(abi='native-ps4-v0')
+        shutil.rmtree(self.source)
+        receipts = order1886_cache.import_shader_cache_seeds(self.state, self.install,
+                                                             log=lambda *_: None)
+        self.assertIn('native-ps4-v0', receipts[0]['skipped'])
+
+    def test_prepare_cache_for_launch_creates_the_package_cache_home(self):
+        home = self.state / 'gpu' / order1886.SHADER_CACHE_ABI
+        self.assertFalse(home.exists())
+        order1886_cache.prepare_cache_for_launch(self.state, self.install, log=lambda *_: None)
+        self.assertTrue((home / 'cache').is_dir())
