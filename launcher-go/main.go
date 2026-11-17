@@ -274,12 +274,23 @@ func (app *App) ConfirmClose() error {
 	return err
 }
 
+func statOK(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 func main() {
 	executable, err := os.Executable()
 	if err != nil {
 		panic(err)
 	}
-	project := flag.String("project-root", filepath.Dir(executable), "Source or portable installation directory")
+	defaultRoot := filepath.Dir(executable)
+	if filepath.Base(defaultRoot) == "bin" {
+		if parent := filepath.Dir(defaultRoot); statOK(filepath.Join(parent, "package-manifest.json")) {
+			defaultRoot = parent // bin/order1886-launcher is the portable UI entry (#114)
+		}
+	}
+	project := flag.String("project-root", defaultRoot, "Source or portable installation directory")
 	state := flag.String("state-dir", "", "Portable title state directory")
 	python := flag.String("python", "python", "Python executable for source development only")
 	direct := flag.Bool("direct-play", strings.HasPrefix(strings.ToLower(filepath.Base(executable)), "play "), "Launch saved configuration")
