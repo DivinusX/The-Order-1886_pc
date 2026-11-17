@@ -379,9 +379,14 @@ bool Rasterizer::DrawPipeWanted() {
     if (env && env[0]) {
         return env[0] == '1';
     }
-    // Stage B spins while draws flow (TOport: +18-19% with 8 and 16 threads). The scheduler
-    // drain hook keeps the GPU command thread off the command buffer while it records.
-    return Ps4Threads::Available() >= 8;
+    // Off by default (v0.2.28). With the two-stage draw pipeline on, gameplay hangs the GPU within
+    // 37-120 s on RADV (RX 9070, Mesa 26.2.6): a gfxhub page fault at the same address inside a
+    // sparse buffer arena every time (an arena page read before it was bound), then a gfx ring
+    // timeout and device lost (exit 23). It hung in 5 of 5 runs with the pipe on and in none of 4
+    // with it off; RADV_DEBUG=hang (serialized submits) also hides it, so it is a race. The root
+    // cause is still open; ORDER1886_DRAW_PIPE=1 re-enables it for that investigation.
+    // (Stage B spins while draws flow; TOport measured +18-19% with 8 and 16 threads.)
+    return false;
 }
 
 bool Rasterizer::UseDrawPipe() const {
