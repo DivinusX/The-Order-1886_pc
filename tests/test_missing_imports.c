@@ -89,7 +89,7 @@ static const char *const kImports[] = {
     "0-KXaS70xy4#libScePosix", "6BpEZuDT7YI#libScePosix", "WrOLvHU0yQM#libScePosix",
     "Xs9hdiD7sAA#libScePosix", "T8fER+tIGgk#libScePosix", "mqULNdimTn0#libScePosix",
     "0Cq8ipKr9n0#libkernel",   "fgIsQ10xYVA#libkernel",   "j2AIqSqJP0w#libkernel",
-    "P41kTWUS3EI#libkernel",   "oIRFTjoILBg#libkernel",   "3rHWaV-1KC4#libSceAppContent",
+    "P41kTWUS3EI#libkernel",   "oIRFTjoILbg#libkernel",   "3rHWaV-1KC4#libSceAppContent",
 };
 
 static KeyCreate key_create;
@@ -131,7 +131,7 @@ static void setup(void) {
     chmod_path = GET(Chmod, "fgIsQ10xYVA#libkernel");
     getdents_fd = GET(Getdents, "j2AIqSqJP0w#libkernel");
     sched_get = GET(SchedGet, "P41kTWUS3EI#libkernel");
-    sched_set = GET(SchedSet, "oIRFTjoILBg#libkernel");
+    sched_set = GET(SchedSet, "oIRFTjoILbg#libkernel");
     addcont_unmount = GET(AddcontUnmount, "3rHWaV-1KC4#libSceAppContent");
     thread_self = GET(ThreadSelf, "aI+OeCz8xrQ#libkernel");
 }
