@@ -213,7 +213,7 @@ struct PassInfo {
 
     // Bumped during codegen to assign offsets to readconsts
     u16 dst_off_dw;
-    const Shader::Info* shader_info = nullptr;
+    Shader::Info* shader_info = nullptr;
     u32 offset_failure_details = 0;
 
     PtrUserList* GetUsesAsPointer(IR::Inst* inst) {
@@ -294,6 +294,12 @@ static std::string DescribeOffsetValue(const IR::Value& value, const PassInfo& p
 
 static void ReportOffsetFailure(PassInfo& pass_info, const IR::Value& value,
                                 const char* context) {
+    // Mark the variant before any early return: the persisted meta must refuse to replay
+    // it (a replayed pipeline that binds the flattened layout while the binary reads the
+    // canonical tables renders invisible world-prompt glyphs, issue-tracked 17 Nov).
+    if (pass_info.shader_info) {
+        pass_info.shader_info->srt_offset_fallback = true;
+    }
     // Keep the original failure and identify its actual SSA operands. Never
     // choose an incoming control-flow value just to let compilation continue.
     if (!pass_info.shader_info || pass_info.offset_failure_details++ >= 32) {

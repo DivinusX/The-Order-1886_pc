@@ -34,7 +34,7 @@
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
 static constexpr u32 ShaderBinaryVersion = 16u; // GCN NaN rules and exclusive float atomic fallbacks
-static constexpr u32 ShaderMetaVersion = 10u; // persisted uniform image guard recipes
+static constexpr u32 ShaderMetaVersion = 11u; // SRT offset-fallback flag (replay-refused variants)
 static constexpr u32 PipelineKeyVersion = 8u; // explicit inactive/active image specialization state
 } // namespace Serialization
 
@@ -676,6 +676,13 @@ bool LoadShaderMeta(Serialization::Archive& ar, Shader::Info& info, Shader::Info
     meta.Read(perm_idx);
 
     if (!spec.Deserialize(ar) || !info.Deserialize(ar) || !effective_info.Deserialize(ar)) {
+        return false;
+    }
+
+    // Variants whose extended-userdata flattening failed read the canonical guest tables;
+    // replaying them binds the layout the meta describes, not the one the binary uses —
+    // world-prompt glyphs rendered invisible this way. Always recompile them instead.
+    if (effective_info.srt_offset_fallback) {
         return false;
     }
 

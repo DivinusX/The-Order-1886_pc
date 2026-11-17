@@ -76,6 +76,11 @@ struct InfoPersistent {
     bool has_fetch_shader{};
     bool has_bitwise_xor{};
     bool uses_dma{};
+    /// The extended-userdata flattening failed at least once, so this variant reads the
+    /// canonical guest tables instead of a flattened copy. The decision is not reproducible
+    /// from the persisted meta alone (it depends on live SSA shapes), so such variants are
+    /// never replayed from disk: LoadShaderMeta refuses them and they compile fresh.
+    bool srt_offset_fallback{};
 
     InfoPersistent() = default;
     InfoPersistent(HwStage hw_stage_, SwStage sw_stage_, u64 pgm_hash_)
