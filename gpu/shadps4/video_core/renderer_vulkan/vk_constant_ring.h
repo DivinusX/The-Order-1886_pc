@@ -8,9 +8,11 @@
 #pragma once
 
 #include <array>
+#include <bit>
 #include <atomic>
 
 #include "common/assert.h"
+#include "common/logging/log.h"
 #include "common/types.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -31,10 +33,13 @@ public:
         return buffer.Handle();
     }
 
-    /// Stage A: `size` bytes at `alignment`; returns the ring offset. When the tail of the ring
-    /// is still in flight, allocation resumes at the retired frontier: the GPU has finished
-    /// everything before it, so those bytes are free. Skipping the upload instead would leave
-    /// the descriptor bound to the previous draw's data — stale world-prompt glyphs (17 Nov).
+    /// Stage A, before the draw packet is begun: `size` bytes at `alignment`; returns the ring
+    /// offset. Live data is [retired, position) in absolute ring positions. When the next lap
+    /// would overtake it, wait for the GPU instead of either skipping the upload (v0.2.26: the
+    /// descriptor kept the previous draw's table, stale world-prompt glyphs) or allocating at
+    /// `retired` (v0.2.27: that is the *start* of the live data, so in-flight draws read
+    /// overwritten constants, followed garbage pointers and faulted the GPU: gfxhub page
+    /// fault, ring timeout, device lost / exit 23 within minutes).
     std::optional<u64> Allocate(u64 size, u64 alignment) {
         u64 at = (position + alignment - 1) & ~(alignment - 1);
         if (at % Capacity + size > Capacity) {
@@ -44,14 +49,18 @@ public:
         if (in_use()) {
             Retire();
             if (in_use()) {
-                at = (retired + alignment - 1) & ~(alignment - 1);
+                WaitForGpu();
                 if (in_use()) {
-                    return std::nullopt; // GPU stalled across the whole ring
+                    return std::nullopt; // larger than the ring: cannot happen for constants
                 }
             }
         }
         position = at + size;
         return at % Capacity;
+    }
+
+    [[nodiscard]] u64 GpuWaits() const noexcept {
+        return gpu_waits;
     }
 
     [[nodiscard]] u8* Data(u64 offset) noexcept {
@@ -93,6 +102,20 @@ private:
         last_published = end;
     }
 
+    /// Submits what is recorded and waits until the GPU is idle (Scheduler::Finish drains the
+    /// draw recording thread first), so every ring byte written so far is consumed. The stamps
+    /// stage B queued describe regions that are now all retired.
+    void WaitForGpu() {
+        scheduler.Finish();
+        retired = position;
+        stamps_tail.store(stamps_head.load(std::memory_order_acquire), std::memory_order_release);
+        ++gpu_waits;
+        if (std::has_single_bit(gpu_waits)) {
+            LOG_WARNING(Render_Vulkan, "Constant ring full: waited for the GPU ({} times)",
+                        gpu_waits);
+        }
+    }
+
     void Retire() {
         auto* semaphore = scheduler.GetWorkSemaphore();
         semaphore->Refresh();
@@ -113,6 +136,7 @@ private:
     VideoCore::Buffer buffer;
     u64 position = 0;     ///< stage A
     u64 retired = 0;      ///< stage A: the GPU is done with everything before this
+    u64 gpu_waits = 0;    ///< stage A: times a full ring waited for the GPU
     u64 pending_end = 0, pending_tick = 0, last_published = 0; ///< stage B
     std::array<StampEntry, 1024> stamps{};
     alignas(64) std::atomic<u64> stamps_head{0}; ///< stage B writes
