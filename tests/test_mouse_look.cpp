@@ -6,6 +6,7 @@
 #include "ps4_mouse.h"
 
 int main() {
+    const Ps4Mouse::Tuning neutral{16, 0, 1, 1};
     assert(Ps4Mouse::WantsCapture(true, false, false, true, true));
     assert(!Ps4Mouse::WantsCapture(true, false, false, false, true));
     assert(!Ps4Mouse::WantsCapture(true, false, false, true, false));
@@ -13,6 +14,7 @@ int main() {
     assert(!Ps4Mouse::WantsCapture(true, false, true, true, true));
     assert(!Ps4Mouse::WantsCapture(false, false, false, true, true));
     Ps4Mouse::Input focus_race;
+    focus_race.SetTuning(neutral);
     focus_race.Capture(Ps4Mouse::WantsCapture(true, false, false, true, true), 0);
     focus_race.Motion(100, 100);
     focus_race.Button(3, true);
@@ -23,6 +25,7 @@ int main() {
     focus_race.Update(0.03, 100, false);
     assert(focus_race.Sample().x == 128 && focus_race.Sample().y == 128);
     Ps4Mouse::Input input;
+    input.SetTuning(neutral);
     auto sample = input.Sample();
     assert(sample.x == 128 && sample.y == 128 && sample.buttons == 0);
     input.Motion(1000, 1000);
@@ -51,6 +54,7 @@ int main() {
     assert(input.Sample().x == 128);
     for (int fps : {30, 60, 120, 240}) {
         Ps4Mouse::Input moving;
+        moving.SetTuning(neutral);
         moving.Capture(true, 0);
         for (int i = 1; i <= fps; ++i) {
             moving.Motion(600.0f / fps, -600.0f / fps);
@@ -70,11 +74,11 @@ int main() {
         const auto c = Ps4Mouse::Tuning::Parse("deadzone=5\ngain=-1\nwindow_ms=0\n");
         assert(c.deadzone == 0.9 && c.gain == 0.1 && c.window_ms == 1);
         const auto d = Ps4Mouse::Tuning::Parse("");
-        assert(d.window_ms == 16 && d.deadzone == 0 && d.curve == 1 && d.gain == 1);
+        assert(d.window_ms == 6 && d.deadzone == 0.18 && d.curve == 1.4 && d.gain == 2.5);
     }
     // Shaping: still is neutral; any motion jumps past the dead zone; diagonals keep their angle.
     {
-        Ps4Mouse::Tuning t;
+        Ps4Mouse::Tuning t = neutral;
         t.deadzone = 0.25;
         std::uint8_t x, y;
         Ps4Mouse::Shape(0, 0, 0.08, t, x, y);
@@ -85,7 +89,7 @@ int main() {
         assert(x <= 1 && y == 128);
         Ps4Mouse::Shape(500, 500, 0.08, t, x, y);
         assert(int(x) - 128 == int(y) - 128); // 45 degrees in, 45 degrees out
-        Ps4Mouse::Tuning curved;
+        Ps4Mouse::Tuning curved = neutral;
         curved.curve = 2;
         Ps4Mouse::Shape(127 * 0.25 / 0.08, 0, 0.08, curved, x, y); // 25% in -> sqrt -> 50% out
         assert(std::abs(int(x) - (128 + 64)) <= 1);
@@ -93,7 +97,7 @@ int main() {
     // Box average: a 30 fps frame (33 ms) longer than the 16 ms window does not inflate speed.
     {
         Ps4Mouse::Input slow;
-        slow.SetTuning({});
+        slow.SetTuning(neutral);
         slow.Capture(true, 0);
         for (int i = 1; i <= 30; ++i) {
             slow.Motion(600.0f / 30, 0);
@@ -104,7 +108,7 @@ int main() {
     // Lower latency than the old 25 ms exponential: one window after motion stops, it is neutral.
     {
         Ps4Mouse::Input quick;
-        quick.SetTuning({});
+        quick.SetTuning(neutral);
         quick.Capture(true, 0);
         for (int i = 1; i <= 120; ++i) {
             quick.Motion(600.0f / 120, 0);
@@ -114,6 +118,17 @@ int main() {
         quick.Update(1 + 2.0 / 120, 100, false);
         quick.Update(1 + 3.0 / 120, 100, false);
         assert(quick.Sample().x == 128);
+    }
+    // Shipped defaults: a slow crawl already turns (past the dead zone), and nothing moves at rest.
+    {
+        Ps4Mouse::Input tuned;
+        tuned.SetTuning(Ps4Mouse::Tuning{});
+        tuned.Capture(true, 0);
+        tuned.Motion(1, 0);
+        tuned.Update(0.004, 100, false);
+        assert(tuned.Sample().x >= 128 + 23);
+        tuned.Update(0.05, 100, false);
+        assert(tuned.Sample().x == 128 && tuned.Sample().y == 128);
     }
     std::puts("PASS: mouse motion, focus reset, inversion, buttons, poll-rate independence, "
               "tuning, dead zone, curve, diagonals and latency");

@@ -22,10 +22,36 @@ Open **Game > Controls** in the launcher. Mouse look defaults to enabled. Adjust
 
 The CLI also accepts `--mouse-look 0|1`, `--mouse-sensitivity 10..500`, and
 `--mouse-invert-y 0|1`. Values reach the same `runtime.ini` settings as the GUI.
-Mouse smoothing uses elapsed time rather than pixels per frame. This is
-mouse-to-stick input: game stick acceleration and dead zones still apply.
-An Order-specific direct 1:1 yaw/pitch hook, rebinding UI, and gameplay validation
-of aiming/QTEs remain outstanding under #4.
+Esc releases the mouse; F6 captures it again.
+
+### How mouse look feels, and how to tune it
+
+This is mouse-to-stick input: the mouse drives the PS4 right stick, so the game's
+own turn-speed ceiling and turn acceleration still apply. What the runtime does
+about the rest (`gpu/shim/ps4_mouse.h`):
+
+- Mouse speed is averaged over 6 ms of real time (it was a 25 ms exponential
+  filter, felt as input lag), independent of the frame rate.
+- Any motion jumps past the game's stick dead zone (radially, so diagonals keep
+  their angle), and a response curve lifts small and medium motion.
+- **Raise the game's own Look / Aim / Scope sensitivity** (Options > Controls).
+  That raises the game's turn-speed ceiling, which nothing outside the game can.
+  8 of 10 felt right in testing; at the default, medium and fast motion all hit
+  the ceiling and need a lot of mousepad.
+
+To tune by feel, write `user/order1886/mouse-tuning.ini`; the running game
+re-reads it about twice a second and logs `Mouse: tuning ...`:
+
+```ini
+window_ms = 6     # speed averaging: lower = less delay, higher = smoother
+deadzone  = 0.18  # how far any motion jumps past the stick dead zone (0..0.9)
+curve     = 1.4   # >1 lifts small and medium motion
+gain      = 2.5   # multiplier on top of the launcher's mouse sensitivity
+```
+
+Delete the file to return to the defaults. A direct 1:1 yaw/pitch hook (no
+turn-speed ceiling or acceleration), rebinding UI, and gameplay validation of
+QTEs remain outstanding under #4.
 
 ## Direct play and desktop shortcuts
 

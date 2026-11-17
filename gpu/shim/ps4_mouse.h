@@ -25,10 +25,13 @@ struct Sample {
 /// Mouse-to-right-stick shaping. The game reads a stick, so a mouse can only drive a turn rate;
 /// these undo what the game's stick handling does to small and diagonal motion.
 struct Tuning {
-    double window_ms = 16;  ///< box average of mouse speed (was a 25 ms exponential: input lag)
-    double deadzone = 0;    ///< radial stick magnitude (0..0.9) any motion jumps past
-    double curve = 1;       ///< inverse response exponent: magnitude^(1/curve) before the game's curve
-    double gain = 1;        ///< multiplier on top of the launcher's sensitivity
+    // Defaults tuned by feel in gameplay (2026-11-17, RX 9070 / Linux, launcher sensitivity 100,
+    // in-game Look/Aim/Scope sensitivity 8 of 10): they replace the old 25 ms exponential filter
+    // and the unshaped linear map that the game's dead zone and curve swallowed.
+    double window_ms = 6;   ///< box average of mouse speed
+    double deadzone = 0.18; ///< radial stick magnitude (0..0.9) any motion jumps past
+    double curve = 1.4;     ///< inverse response exponent: magnitude^(1/curve) before the game's curve
+    double gain = 2.5;      ///< multiplier on top of the launcher's sensitivity
 
     /// key=value lines (window_ms, deadzone, curve, gain); unknown keys and bad values are ignored.
     static Tuning Parse(const std::string& text) {
