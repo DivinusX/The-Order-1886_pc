@@ -113,50 +113,75 @@ def ensure_cache_home(state) -> Path:
     return home
 
 
-def _fallback_title_caches(state, title_id):
-    """The per-user locations path_util.cpp falls back to, newest first."""
-    import order1886
-
-    abi = order1886.SHADER_CACHE_ABI
-    roots = []
-    if os.name == 'nt':
-        base = os.environ.get('APPDATA')
-        if base:
-            roots.append(Path(base))
-    else:
-        if sys.platform == 'darwin':
-            home = Path.home()
-            roots.append(home / 'Library' / 'Application Support')
-        else:
-            xdg = os.environ.get('XDG_DATA_HOME')
-            roots.append(Path(xdg) if xdg else Path.home() / '.local' / 'share')
-    # The fallback user dir is <root>/shadPS4; the cache path does not carry the
-    # abi folder (that spelling is only used under ORDER1886_GPU_USER_DIR).
-    return [root / 'shadPS4' / 'cache' / title_id for root in roots]
-
-
 def migrate_shared_caches(state, log=print) -> int:
-    """Copy caches the pre-fix launcher left in the shared per-user directory
-    into the package. Copy-only (the old folder is kept), and never onto a
-    package cache that already has a profile.bin."""
-    import order1886
+    """No longer adopts anything; kept so older callers keep working.
 
-    copied = 0
-    for title_id in order1886.editions.TITLE_IDS:
-        target = title_cache_dir(state, title_id)
-        if (target / 'profile.bin').exists():
-            continue
-        for source in _fallback_title_caches(state, title_id):
-            if not source.is_dir() or not any(source.iterdir()):
-                continue
-            target.mkdir(parents=True, exist_ok=True)
-            for entry in source.iterdir():
-                if entry.is_file() and not (target / entry.name).exists():
-                    shutil.copy2(entry, target / entry.name)
-                    copied += 1
-            log(f'order1886 cache: moved {copied} cached-pipeline files from {source}')
-            break
-    return copied
+    v0.2.24-v0.2.27 copied the shared per-user cache (XDG / %APPDATA% shadPS4)
+    into the package. That folder can only hold caches written by a different
+    build: a pre-v0.2.24 package or a local engine build. Since v0.2.26 their
+    shader metas are refused anyway (meta format 11), so adopting them gained
+    nothing but their graphics-pipeline keys, and replaying foreign keys during
+    WarmUp crashes RADV (SIGSEGV in CreateCachedGraphicsPipeline, exit 139) on
+    every boot. The old folder is left untouched; the cache rebuilds by playing.
+    """
+    return 0
+
+
+# Frames that put a host fault inside the boot-time pipeline-cache replay.
+_WARMUP_FAULT_FRAMES = ('PipelineCache6WarmUp', 'PipelineCache::WarmUp',
+                        'LoadGraphicsPipeline', 'CreateCachedGraphicsPipeline')
+
+
+def _warmup_crash(report):
+    """Return the crashed boot's log text if the run died replaying the cache."""
+    if report.get('status') != 'failed' or not report.get('log'):
+        return None
+    try:
+        text = Path(report['log']).read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return None
+    _, fault, backtrace = text.rpartition('Host fault')
+    if not fault or not any(frame in backtrace for frame in _WARMUP_FAULT_FRAMES):
+        return None
+    return backtrace
+
+
+def quarantine_crashed_cache(state, log=print):
+    """Set aside a pipeline cache whose replay crashed the previous boot.
+
+    WarmUp replays every recorded pipeline before the first frame, so a single
+    entry the driver cannot rebuild crashes every launch, forever. When
+    logs/last-run.json says the last boot failed with a host fault inside that
+    replay, the title's cache is renamed to <TITLE_ID>.crashed-<run> (the cache
+    is regenerable; nothing is deleted except an older quarantine of the same
+    title) and the next boot starts clean. Returns the quarantine path or None.
+    """
+    state = Path(state).absolute()
+    try:
+        report = json.loads((state / 'logs' / 'last-run.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    title_id = report.get('title_id')
+    abi = report.get('shader_cache_abi') or None
+    if not isinstance(title_id, str) or not title_id.isalnum() or _warmup_crash(report) is None:
+        return None
+    cache = title_cache_dir(state, title_id, abi)
+    _check_ancestors(cache)
+    if not cache.is_dir():
+        return None
+    run = ''.join(ch for ch in str(report.get('started_utc') or 'last') if ch.isalnum())
+    target = cache.with_name(f'{title_id}.crashed-{run}')
+    for old in cache.parent.glob(f'{title_id}.crashed-*'):
+        if old != target:
+            _check_ancestors(old)
+            if old.is_dir() and not old.is_symlink():
+                shutil.rmtree(old)
+    if target.exists():
+        return None  # this crash was already handled; the cache here is newer
+    os.replace(cache, target)
+    log(f'order1886 cache: the last boot crashed replaying the {title_id} pipeline cache; '
+        f'moved it to {target.name} so this launch rebuilds it')
+    return target
 
 
 def _sha256(path: Path) -> str:
@@ -269,11 +294,13 @@ def import_shader_cache_seeds(state, install_root=None, log=print, abi=None) -> 
 
 
 def prepare_cache_for_launch(state, install_root=None, log=print):
-    """One launch-time step: keep the cache in the package, adopt a pre-fix
-    cache, and import any shipped seed. Never fails a launch over cache work."""
+    """One launch-time step: keep the cache in the package, set aside a cache
+    whose replay crashed the last boot, and import any shipped seed. Never
+    fails a launch over cache work."""
     try:
         ensure_cache_home(state)
-        migrate_shared_caches(state, log)
+        if quarantine_crashed_cache(state, log):
+            return []  # a seed may be what crashed; this boot rebuilds from scratch
         return import_shader_cache_seeds(state, install_root, log)
     except Exception as error:  # noqa: BLE001 - a broken seed must not stop the game
         log(f'order1886 cache: {error}')
