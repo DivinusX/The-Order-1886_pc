@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstdlib>
+#include <cstring>
 #include <magic_enum/magic_enum.hpp>
 #include "ps4_copy.h"
 #include "ps4_toggles.h"
@@ -26,6 +27,26 @@
 #include "video_core/texture_cache/texture_cache.h"
 
 #include <vk_mem_alloc.h>
+#include <pthread.h>
+#include "video_core/renderer_vulkan/vk_draw_pipe.h"
+
+namespace {
+// Diagnostics for the draw-pipeline GPU hang: ORDER1886_PERF_DIAG=arena logs arena creation
+// (guest range, GPU address), every residency change and every sparse-bind submission with the
+// calling thread, so a gfxhub fault address maps to a guest range and an off-stage-B caller shows.
+bool ArenaDiag() {
+    static const bool on = [] {
+        const char* v = std::getenv("ORDER1886_PERF_DIAG");
+        return v && std::strstr(v, "arena");
+    }();
+    return on;
+}
+std::string ThreadTag() {
+    char name[32] = "?";
+    pthread_getname_np(pthread_self(), name, sizeof(name));
+    return std::string(name) + (Vulkan::DrawPipe::OnStageB() ? "[B]" : "");
+}
+} // namespace
 
 namespace VideoCore {
 
@@ -869,6 +890,10 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
                                      num_pages << arena_page_bits, MemoryType::Sparse);
             address_space[first_page] = new_arena;
             address_space[last_page] = new_arena;
+            if (ArenaDiag())
+                LOG_WARNING(Render, "ARENADIAG create cpu=[{:#x},+{:#x}) bda={:#x} thread={}",
+                            new_arena->cpu_addr, new_arena->size_bytes,
+                            new_arena->BufferDeviceAddress(), ThreadTag());
         }
         return address_space[first_page];
     }
@@ -883,6 +908,11 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
     const u64 total_size = first_size + last_size;
     const u64 end_block = (first_addr + total_size) >> block_shift;
     auto* new_arena = &arenas.emplace_back(instance, first_addr, total_size, MemoryType::Sparse);
+    if (ArenaDiag())
+        LOG_WARNING(Render, "ARENADIAG migrate cpu=[{:#x},+{:#x}) bda={:#x} old_first={:#x} old_last={:#x} thread={}",
+                    new_arena->cpu_addr, new_arena->size_bytes, new_arena->BufferDeviceAddress(),
+                    first_arena ? first_arena->BufferDeviceAddress() : 0,
+                    last_arena ? last_arena->BufferDeviceAddress() : 0, ThreadTag());
     auto* bind = BindsForArena(new_arena);
     resident_ranges.ForEachInRange(base_block, end_block, [&](const Backing& backing) {
         const u64 start = std::max(base_block, backing.start);
@@ -942,6 +972,13 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
         resident_ranges.Add(backing);
 
         LOG_INFO(Render, "Making range start={}, end={} resident", backing.start, backing.end);
+        if (ArenaDiag())
+            LOG_WARNING(Render, "ARENADIAG resident cpu=[{:#x},{:#x}) arena_bda={:#x} gpu=[{:#x},{:#x}) pending_binds={} thread={}",
+                        backing.start << block_shift, backing.end << block_shift,
+                        arena->BufferDeviceAddress(),
+                        arena->BufferDeviceAddress() + (backing.start << block_shift) - arena->cpu_addr,
+                        arena->BufferDeviceAddress() + (backing.end << block_shift) - arena->cpu_addr,
+                        pending_binds.size(), ThreadTag());
 
         const auto& bind = binds->binds.emplace_back(vk::SparseMemoryBind{
             .resourceOffset = (range.start << block_shift) - arena->cpu_addr,
@@ -1175,6 +1212,12 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     };
 
     info.AddWait(signal_sema, signal_tick);
+    if (ArenaDiag()) {
+        size_t total = 0;
+        for (const auto& b : buffer_binds) total += b.bindCount;
+        LOG_WARNING(Render, "ARENADIAG bindSparse arenas={} binds={} tick={} thread={}",
+                    buffer_binds.size(), total, signal_tick, ThreadTag());
+    }
     auto submit_result = instance.GetSparseQueue().bindSparse(sparse_info);
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
 
