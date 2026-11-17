@@ -61,5 +61,60 @@ int main() {
         for (int i = 1; i <= fps; ++i) moving.Update(1 + double(i) / fps, 100, false);
         assert(moving.Sample().x == 128 && moving.Sample().y == 128);
     }
-    std::puts("PASS: mouse motion, focus reset, inversion, buttons and poll-rate independence");
+    // Tuning file parsing: known keys, clamping, comments, junk ignored.
+    {
+        const auto t = Ps4Mouse::Tuning::Parse(
+            "# comment\nwindow_ms = 8\ndeadzone=0.25 # trailing\ncurve=2\ngain=1.5\nbogus=3\n"
+            "deadzone_x=9\ncurve=abc\n");
+        assert(t.window_ms == 8 && t.deadzone == 0.25 && t.curve == 2 && t.gain == 1.5);
+        const auto c = Ps4Mouse::Tuning::Parse("deadzone=5\ngain=-1\nwindow_ms=0\n");
+        assert(c.deadzone == 0.9 && c.gain == 0.1 && c.window_ms == 1);
+        const auto d = Ps4Mouse::Tuning::Parse("");
+        assert(d.window_ms == 16 && d.deadzone == 0 && d.curve == 1 && d.gain == 1);
+    }
+    // Shaping: still is neutral; any motion jumps past the dead zone; diagonals keep their angle.
+    {
+        Ps4Mouse::Tuning t;
+        t.deadzone = 0.25;
+        std::uint8_t x, y;
+        Ps4Mouse::Shape(0, 0, 0.08, t, x, y);
+        assert(x == 128 && y == 128);
+        Ps4Mouse::Shape(1, 0, 0.08, t, x, y); // a crawl: just past the dead zone
+        assert(x >= 128 + 31 && x <= 128 + 33 && y == 128);
+        Ps4Mouse::Shape(-1e6, 0, 0.08, t, x, y); // saturates at full deflection
+        assert(x <= 1 && y == 128);
+        Ps4Mouse::Shape(500, 500, 0.08, t, x, y);
+        assert(int(x) - 128 == int(y) - 128); // 45 degrees in, 45 degrees out
+        Ps4Mouse::Tuning curved;
+        curved.curve = 2;
+        Ps4Mouse::Shape(127 * 0.25 / 0.08, 0, 0.08, curved, x, y); // 25% in -> sqrt -> 50% out
+        assert(std::abs(int(x) - (128 + 64)) <= 1);
+    }
+    // Box average: a 30 fps frame (33 ms) longer than the 16 ms window does not inflate speed.
+    {
+        Ps4Mouse::Input slow;
+        slow.SetTuning({});
+        slow.Capture(true, 0);
+        for (int i = 1; i <= 30; ++i) {
+            slow.Motion(600.0f / 30, 0);
+            slow.Update(double(i) / 30, 100, false);
+        }
+        assert(std::abs(int(slow.Sample().x) - 176) <= 1);
+    }
+    // Lower latency than the old 25 ms exponential: one window after motion stops, it is neutral.
+    {
+        Ps4Mouse::Input quick;
+        quick.SetTuning({});
+        quick.Capture(true, 0);
+        for (int i = 1; i <= 120; ++i) {
+            quick.Motion(600.0f / 120, 0);
+            quick.Update(double(i) / 120, 100, false);
+        }
+        quick.Update(1 + 1.0 / 120, 100, false);
+        quick.Update(1 + 2.0 / 120, 100, false);
+        quick.Update(1 + 3.0 / 120, 100, false);
+        assert(quick.Sample().x == 128);
+    }
+    std::puts("PASS: mouse motion, focus reset, inversion, buttons, poll-rate independence, "
+              "tuning, dead zone, curve, diagonals and latency");
 }
