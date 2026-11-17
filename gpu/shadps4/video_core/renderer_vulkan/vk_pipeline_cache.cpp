@@ -581,6 +581,27 @@ void PipelineCache::PublishShaders(bool wait) {
             }
             continue;
         }
+        if (build->info.srt_offset_fallback) {
+            // The worker flattened the user data against guest tables the game was still
+            // writing, and a variant that falls back to the canonical tables depends on that live
+            // shape: the world-prompt glyph (newspaper, photo, weapon discs) then sampled nothing
+            // or the wrong button, for the whole session. A synchronous compile at the draw sees
+            // consistent tables (verified with async_shaders=0), so discard this result and
+            // compile this program at the draw from now on. Other programs stay asynchronous.
+            instance.GetDevice().destroyShaderModule(build->module);
+            build->module = nullptr;
+            sync_shaders.insert(hash);
+            {
+                std::unique_lock lock{programs_mutex};
+                program->pending.reset();
+            }
+            LOG_WARNING(Render_Vulkan,
+                        "ps4: shader {:#x}/{} fell back to canonical tables off-thread; "
+                        "compiling it at the draw ({} such shaders)",
+                        hash, build->permutation, sync_shaders.size());
+            retire();
+            continue;
+        }
         const auto perm_hash = HashCombine(hash, build->permutation);
         Vulkan::SetObjectName(instance.GetDevice(), build->module,
                              GetShaderName(build->info.hw_stage, hash, build->permutation));
@@ -1183,7 +1204,8 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
     auto it_pgm = program_cache.find(params.hash); // this thread is the only writer
     const bool compile_async = AsyncCompilation() && hw_stage != HwStage::Compute &&
                                !sel.regs->stage_enable.hs_en &&
-                               !EmulatorSettings.IsShaderCollect();
+                               !EmulatorSettings.IsShaderCollect() &&
+                               !sync_shaders.contains(params.hash);
     if (!compile_async && it_pgm != program_cache.end() && it_pgm->second->pending) {
         {
             PhaseTimer waiting{g_ps4_compile_wait_ns};

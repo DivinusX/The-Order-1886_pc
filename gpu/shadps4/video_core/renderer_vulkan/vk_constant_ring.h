@@ -24,7 +24,9 @@ namespace Vulkan {
 
 class ConstantRing {
 public:
-    static constexpr u64 Capacity = 32ull << 20;
+    // 128 MB: measured up to ~25 MB of constants per frame in interior scenes (1.45 GB/s at
+    // ~57 fps); 32 MB held barely one frame, so stage A waited for the GPU every frame.
+    static constexpr u64 Capacity = 128ull << 20;
 
     ConstantRing(const Instance& instance, Scheduler& scheduler_)
         : scheduler{scheduler_},

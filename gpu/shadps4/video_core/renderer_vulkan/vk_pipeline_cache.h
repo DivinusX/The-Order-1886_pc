@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <unordered_set>
+
 #include <functional>
 #include <unordered_map>
 #include <shared_mutex>
@@ -246,6 +248,9 @@ private:
     tsl::robin_map<GraphicsPipelineKey, std::shared_ptr<AsyncGraphicsCompilation>> pending_graphics;
     tsl::robin_map<size_t, std::unique_ptr<Program>> program_cache;
     std::vector<Program*> pending_programs;
+    /// Programs whose off-thread translation fell back to the canonical guest tables
+    /// (srt_offset_fallback): compiled synchronously at the draw from then on (see PublishShaders).
+    std::unordered_set<u64> sync_shaders;
     /// exclusive for program/permutation insertions, shared for worker lookups.
     std::shared_mutex programs_mutex;
     u64 prepared_hits = 0, prepared_misses = 0;
