@@ -26,8 +26,11 @@ enum class AuxShaderType : u32 {
 /// shader's outputs through, writes each per-vertex fragment input's three corners to their
 /// flat locations and the barycentrics as unit vectors at the corners. Empty when the vertex
 /// shader writes Layer or ViewportIndex (a geometry shader cannot read them back).
+/// `after_aux_tes`: the stage before is the rect/quad-list PassthroughTES (its gl_PerVertex
+/// block and its attribute locations, which carry no clip-distance input).
 [[nodiscard]] std::vector<u32> EmitBarycentricGeometryShader(const HwFragmentRuntimeInfo& fs_rt,
                                                              const Info& fs_info,
-                                                             const Info& vs_info);
+                                                             const Info& vs_info,
+                                                             bool after_aux_tes = false);
 
 } // namespace Shader::Backend::SPIRV

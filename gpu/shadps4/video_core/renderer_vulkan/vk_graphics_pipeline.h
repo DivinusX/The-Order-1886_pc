@@ -93,6 +93,10 @@ public:
         std::vector<u32> tcs{};
         std::vector<u32> tes{};
         std::vector<u32> fragment{};
+        /// Barycentric-emulation geometry shader of a rect/quad-list pipeline (issue #26; their
+        /// tes slot holds the aux TES). Serialized last and only when present, so caches of
+        /// other GPUs keep their format.
+        std::vector<u32> gs{};
 
         void Serialize(Serialization::Archive& ar) const;
         bool Deserialize(Serialization::Archive& ar);

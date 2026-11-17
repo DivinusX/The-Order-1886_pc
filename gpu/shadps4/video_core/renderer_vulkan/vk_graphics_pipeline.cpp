@@ -8,6 +8,7 @@
 #include <boost/container/small_vector.hpp>
 
 #include "common/assert.h"
+#include "shader_recompiler/backend/spirv/bary_emulation.h"
 #include "shader_recompiler/backend/spirv/emit_spirv_discard_frag.h"
 #include "shader_recompiler/backend/spirv/emit_spirv_quad_rect.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
@@ -212,6 +213,49 @@ GraphicsPipeline::GraphicsPipeline(
             runtime_infos[u32(Shader::SwStage::Fragment)].hw.fs,
             *infos[u32(Shader::SwStage::Fragment)], *infos[u32(Shader::SwStage::Vertex)]);
     }
+    // Rect/quad lists (full-screen passes) run the aux TES; the same GS goes after it. Their
+    // tes slot is taken, so the module is serialized in sdata.gs.
+    const bool aux_bary_gs = profile.EmulatesFragmentBarycentric() && !infos[stage] &&
+                             infos[u32(Shader::SwStage::Vertex)] &&
+                             infos[u32(Shader::SwStage::Fragment)] &&
+                             !infos[u32(Shader::SwStage::TessellationControl)] &&
+                             !infos[u32(Shader::SwStage::TessellationEval)] &&
+                             (is_rect_list || is_quad_list);
+    if (aux_bary_gs && !preloading) {
+        sdata.gs = Shader::Backend::SPIRV::EmitBarycentricGeometryShader(
+            runtime_infos[u32(Shader::SwStage::Fragment)].hw.fs,
+            *infos[u32(Shader::SwStage::Fragment)], *infos[u32(Shader::SwStage::Vertex)], true);
+    }
+    const bool gs_attached = (bary_gs && !sdata.tes.empty()) || (aux_bary_gs && !sdata.gs.empty());
+    // Diagnostic (issue #26 follow-up): a fragment shader compiled for emulated barycentrics
+    // reads its corners/barycentrics from locations only the generated GS writes. Report every
+    // pipeline that needs them but does not get the GS.
+    if (profile.EmulatesFragmentBarycentric() && infos[u32(Shader::SwStage::Fragment)]) {
+        const auto& fs_info = *infos[u32(Shader::SwStage::Fragment)];
+        const auto layout = Shader::Backend::SPIRV::ComputeBaryEmulation(
+            runtime_infos[u32(Shader::SwStage::Fragment)].hw.fs, fs_info);
+        if (layout.needed && !gs_attached && !preloading) {
+            static std::atomic<u32> reported{0};
+            if (reported.fetch_add(1) < 200) {
+                const char* reason = !layout.ok         ? "layout overflow"
+                                     : infos[stage]     ? "guest GS"
+                                     : infos[u32(Shader::SwStage::TessellationEval)] ? "tessellation"
+                                     : is_rect_list     ? "rect list (clip emulation)"
+                                     : is_quad_list     ? "quad list (clip emulation)"
+                                     : !triangles       ? "not triangles"
+                                     : !infos[u32(Shader::SwStage::Vertex)] ? "no VS"
+                                                        : "GS not generated (layer/viewport)";
+                LOG_WARNING(Render_Vulkan,
+                            "BARYDIAG fs={:#x} vs={:#x} prim={} : no barycentric GS ({}); "
+                            "corners/barycentrics are undefined",
+                            fs_info.pgm_hash,
+                            infos[u32(Shader::SwStage::Vertex)]
+                                ? infos[u32(Shader::SwStage::Vertex)]->pgm_hash
+                                : 0ull,
+                            u32(key.prim_type), reason);
+            }
+        }
+    }
     if (infos[stage]) {
         shader_stages.emplace_back(vk::PipelineShaderStageCreateInfo{
             .stage = vk::ShaderStageFlagBits::eGeometry,
@@ -222,6 +266,12 @@ GraphicsPipeline::GraphicsPipeline(
         shader_stages.emplace_back(vk::PipelineShaderStageCreateInfo{
             .stage = vk::ShaderStageFlagBits::eGeometry,
             .module = CompileSPV(sdata.tes, instance.GetDevice()),
+            .pName = "main",
+        });
+    } else if (aux_bary_gs && !sdata.gs.empty()) {
+        shader_stages.emplace_back(vk::PipelineShaderStageCreateInfo{
+            .stage = vk::ShaderStageFlagBits::eGeometry,
+            .module = CompileSPV(sdata.gs, instance.GetDevice()),
             .pName = "main",
         });
     }

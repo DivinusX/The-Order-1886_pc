@@ -799,6 +799,9 @@ void GraphicsPipeline::SerializationSupport::Serialize(Serialization::Archive& a
     sdata.Write(multisampling);
     sdata.Write(tcs);
     sdata.Write(tes);
+    if (!gs.empty()) {
+        sdata.Write(gs);
+    }
 }
 
 bool GraphicsPipeline::SerializationSupport::Deserialize(Serialization::Archive& ar) {
@@ -810,6 +813,9 @@ bool GraphicsPipeline::SerializationSupport::Deserialize(Serialization::Archive&
     sdata.Read(multisampling);
     sdata.Read(tcs);
     sdata.Read(tes);
+    if (!ar.IsEoS()) {
+        sdata.Read(gs);
+    }
     return true;
 }
 
@@ -956,7 +962,7 @@ bool PipelineCache::CheckCacheProfile() {
     std::vector<u8> expected(sizeof(profile));
     std::memcpy(expected.data(), &profile, sizeof(profile));
     if (profile.EmulatesFragmentBarycentric()) {
-        expected.push_back(0xB7);
+        expected.push_back(0xB8); // 0xB8: rect/quad lists carry the GS too
     }
 
     std::vector<u8> profile_data{};
@@ -970,6 +976,10 @@ bool PipelineCache::CheckCacheProfile() {
     // Member-wise, not bytewise: Profile has padding whose bytes are not guaranteed.
     const bool compatible = [&] {
         if (profile_data.size() != expected.size()) {
+            return false;
+        }
+        // The emulation marker byte versions the emulating GPUs' caches.
+        if (expected.size() > sizeof(profile) && profile_data.back() != expected.back()) {
             return false;
         }
         Shader::Profile cached_profile{};

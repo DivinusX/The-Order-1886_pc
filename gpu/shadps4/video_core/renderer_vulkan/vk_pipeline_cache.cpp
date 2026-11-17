@@ -371,15 +371,25 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
             instance_.IsAmdShaderExplicitVertexParameterSupported(),
         .supports_fragment_shader_barycentric = instance_.IsFragmentShaderBarycentricSupported(),
         .supports_shader_subgroup_clock = instance_.IsShaderSubgroupClockSupported(),
-        .needs_manual_interpolation = instance.IsFragmentShaderBarycentricSupported() &&
-                                      instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
-        // older NVIDIA (Pascal) has no barycentrics; ORDER1886_INTERP_INT_FIX=0/1 overrides.
+        // NVIDIA does not interpolate three equal corner values exactly; AMD does, and The
+        // Order packs integers into smooth varyings. With corners available (KHR natively, or
+        // emulated by the barycentric GS on GTX 10, issue #26) interpolate by hand there.
+        // ORDER1886_PERF_DIAG=...manualinterp exercises the NVIDIA path on any GPU that has
+        // the corners (e.g. nobary,manualinterp on AMD behaves like a GTX 10).
+        .needs_manual_interpolation = [&] {
+            const bool has_corners = !instance.IsAmdShaderExplicitVertexParameterSupported();
+            const char* diag = std::getenv("ORDER1886_PERF_DIAG");
+            if (diag && std::strstr(diag, "manualinterp")) {
+                return has_corners;
+            }
+            return has_corners && instance.GetDriverID() == vk::DriverId::eNvidiaProprietary;
+        }(),
+        // Only when nothing else gives exact values; ORDER1886_INTERP_INT_FIX=0/1 overrides.
         .needs_integer_interpolation_fix = [&] {
             if (const char* env = std::getenv("ORDER1886_INTERP_INT_FIX")) {
                 return env[0] == '1';
             }
-            return !instance.IsFragmentShaderBarycentricSupported() &&
-                   instance.GetDriverID() == vk::DriverId::eNvidiaProprietary;
+            return false;
         }(),
         .needs_lds_barriers = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary ||
                               instance.GetDriverID() == vk::DriverId::eMesaKosmickrisp,

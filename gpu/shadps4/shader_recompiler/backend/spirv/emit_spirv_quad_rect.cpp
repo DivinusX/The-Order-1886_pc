@@ -339,9 +339,14 @@ std::vector<u32> EmitAuxilaryTessShader(AuxShaderType type, const HwFragmentRunt
 }
 
 std::vector<u32> EmitBarycentricGeometryShader(const HwFragmentRuntimeInfo& fs_rt,
-                                               const Info& fs_info, const Info& vs_info) {
-    if (vs_info.stores.GetAny(IR::Attribute::RenderTargetIndex) ||
-        vs_info.stores.GetAny(IR::Attribute::ViewportIndex)) {
+                                               const Info& fs_info, const Info& vs_info,
+                                               bool after_aux_tes) {
+    if (!after_aux_tes && (vs_info.stores.GetAny(IR::Attribute::RenderTargetIndex) ||
+                           vs_info.stores.GetAny(IR::Attribute::ViewportIndex))) {
+        return {};
+    }
+    // The aux TES writes no clip-distance input for the fragment shader.
+    if (after_aux_tes && fs_rt.clip_distance_emulation) {
         return {};
     }
     const auto layout = ComputeBaryEmulation(fs_rt, fs_info);
@@ -372,10 +377,13 @@ std::vector<u32> EmitBarycentricGeometryShader(const HwFragmentRuntimeInfo& fs_r
 
     // gl_PerVertex with exactly the members the vertex shader writes: declaring ClipDistance it
     // never wrote would clip with garbage.
-    const bool point_size = vs_info.stores.GetAny(IR::Attribute::PointSize);
-    const bool clip = vs_info.stores.GetAny(IR::Attribute::ClipDistance) &&
+    // After the rect/quad-list aux TES the input block is that shader's fixed one (Position,
+    // PointSize, ClipDistance[1], CullDistance[1], only Position written) and only Position is
+    // passed on.
+    const bool point_size = !after_aux_tes && vs_info.stores.GetAny(IR::Attribute::PointSize);
+    const bool clip = !after_aux_tes && vs_info.stores.GetAny(IR::Attribute::ClipDistance) &&
                       !fs_rt.clip_distance_emulation;
-    const bool cull = vs_info.stores.GetAny(IR::Attribute::CullDistance);
+    const bool cull = !after_aux_tes && vs_info.stores.GetAny(IR::Attribute::CullDistance);
     const Id dist_arr{m.TypeArray(float_id, u(8))};
     std::vector<Id> members{vec[4]};
     std::vector<spv::BuiltIn> builtins{spv::BuiltIn::Position};
@@ -391,16 +399,28 @@ std::vector<u32> EmitBarycentricGeometryShader(const HwFragmentRuntimeInfo& fs_r
         members.push_back(dist_arr);
         builtins.push_back(spv::BuiltIn::CullDistance);
     }
-    const auto per_vertex_type = [&] {
-        const Id type{m.TypeStruct(members)};
+    const auto per_vertex_type = [&](const std::vector<Id>& types,
+                                     const std::vector<spv::BuiltIn>& names) {
+        const Id type{m.TypeStruct(types)};
         m.Decorate(type, spv::Decoration::Block);
-        for (u32 k = 0; k < builtins.size(); ++k) {
-            m.MemberDecorate(type, k, spv::Decoration::BuiltIn, static_cast<u32>(builtins[k]));
+        for (u32 k = 0; k < names.size(); ++k) {
+            m.MemberDecorate(type, k, spv::Decoration::BuiltIn, static_cast<u32>(names[k]));
         }
         return type;
     };
-    const Id block{per_vertex_type()}; // one type for both: Sirit merges identical types
-    const Id gl_in{add(m.TypeArray(block, u(3)), spv::StorageClass::Input)};
+    const Id block{per_vertex_type(members, builtins)}; // the output block
+    // Sirit merges identical types, so the aux-TES input block (a different member list) is
+    // only built when needed; otherwise both directions share `block`.
+    const Id in_block = [&] {
+        if (!after_aux_tes) {
+            return block;
+        }
+        const Id arr1{m.TypeArray(float_id, u(1))};
+        return per_vertex_type({vec[4], float_id, arr1, arr1},
+                               {spv::BuiltIn::Position, spv::BuiltIn::PointSize,
+                                spv::BuiltIn::ClipDistance, spv::BuiltIn::CullDistance});
+    }();
+    const Id gl_in{add(m.TypeArray(in_block, u(3)), spv::StorageClass::Input)};
     const Id gl_out{add(block, spv::StorageClass::Output)};
     const Id prim_in{add(int_id, spv::StorageClass::Input)};
     m.Decorate(prim_in, spv::Decoration::BuiltIn, spv::BuiltIn::PrimitiveId);
