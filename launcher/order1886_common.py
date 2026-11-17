@@ -251,6 +251,8 @@ def load_launch_settings(state: Path, saved: dict | None = None) -> dict:
         "mod_order": saved.get("mod_order", []),
         "selected_patches": saved.get("selected_patches", []),
         **{key: saved.get(key, default) for key, default in order1886.GRAPHICS_DEFAULTS.items()},
+        # v0.2.30 one-time reset (see Worker.settings): until it is saved, launch without them.
+        **({"async_shaders": False} if saved.get("async_shaders_v0230") != 1 else {}),
         **{key: bool(saved.get(key, True)) for key in order1886.post_effects.EFFECTS},
     }
     for key, allowed, default in (

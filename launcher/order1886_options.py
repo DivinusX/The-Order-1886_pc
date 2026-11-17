@@ -175,8 +175,8 @@ for key, label, default in (("overlay_frametime", "Overlay: frame time", True), 
 field("frames_queued", "Queued frames", "performance", "select", 1,
       "How many frames the GPU command thread may run ahead of the GPU. 1 is the paced baseline; 2 can raise throughput at the cost of latency; Unbounded removes the wait and can make frame delivery bursty.",
       [(1, "1 — baseline", ""), (2, "2 (unqualified)", ""), (0, "Unbounded (unqualified)", "")])
-field("async_shaders", "Asynchronous shaders", "performance", "boolean", True,
-      "Compile new shaders and pipelines off the GPU thread. A draw whose pipeline is still compiling is skipped for that frame, so a first-time effect can be missing for a moment instead of the game stopping. Compute dispatches and tessellated draws still compile in place. Turn it off to wait for every compile.")
+field("async_shaders", "Asynchronous shaders", "performance", "boolean", False,
+      "Compile new shaders and pipelines off the GPU thread. A draw whose pipeline is still compiling is skipped for that frame, so a first-time effect can be missing for a moment instead of the game stopping. Compute dispatches and tessellated draws still compile in place. Off by default: with it on, the button symbol inside world interaction prompts (newspaper, photo, weapons) can render as an empty circle.")
 UNQUALIFIED = "Off by default: the correctness baseline. Turning it on is unqualified for stability and visuals; use it to help measure the path."
 for key, label, detail in (
         ("background_warmup", "Background pipeline warmup (unqualified)",

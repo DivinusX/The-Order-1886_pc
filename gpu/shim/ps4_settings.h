@@ -58,7 +58,10 @@ struct Values {
     std::atomic<int> fps_limit{30};
     /// Pipelines compile off the GPU thread; a draw waiting for one is skipped meanwhile
     /// (docs/verification/2026-10-24-async-pipeline-compile.md).
-    std::atomic<bool> async_shaders{true};
+    // Off by default (v0.2.30): off-thread first compiles of the world-prompt shaders read guest
+    // tables the game was still writing, and the glyph (newspaper, photo, weapon discs) rendered
+    // as an empty circle for the session. Compiling at the draw renders it (owner, live).
+    std::atomic<bool> async_shaders{false};
     std::atomic<bool> fsr1{false};
     std::atomic<bool> rcas{false};
     std::atomic<int> rcas_strength{75};

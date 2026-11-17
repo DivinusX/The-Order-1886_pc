@@ -106,6 +106,20 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(self.app.dispatch("state.get", {})["settings"]["frame_rate"], 90)
         self.assertEqual(path.read_text(), text)
 
+    def test_async_shaders_reset_once_for_old_settings_without_rewriting(self):
+        # v0.2.30: settings saved by earlier versions pin async shaders on (they broke the
+        # world-prompt glyph). They read as off, settings.json is not rewritten by reading, and
+        # once the marker is saved the player's own choice wins.
+        self.state.mkdir()
+        path = self.state / "settings.json"
+        text = json.dumps({"async_shaders": True})
+        path.write_text(text)
+        settings = self.app.dispatch("state.get", {})["settings"]
+        self.assertFalse(settings["async_shaders"])
+        self.assertEqual(path.read_text(), text)
+        path.write_text(json.dumps({"async_shaders": True, "async_shaders_v0230": 1}))
+        self.assertTrue(self.app.dispatch("state.get", {})["settings"]["async_shaders"])
+
     def test_custom_bindings_are_validated_before_autosave_and_restore(self):
         catalog = {'keyboard_sources': ['Q', 'Space'], 'controller_sources': ['a', 'b'],
                    'unbinding': True,

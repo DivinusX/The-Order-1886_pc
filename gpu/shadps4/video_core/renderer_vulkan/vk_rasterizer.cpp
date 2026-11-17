@@ -379,14 +379,12 @@ bool Rasterizer::DrawPipeWanted() {
     if (env && env[0]) {
         return env[0] == '1';
     }
-    // Off by default (v0.2.28). With the two-stage draw pipeline on, gameplay hangs the GPU within
-    // 37-120 s on RADV (RX 9070, Mesa 26.2.6): a gfxhub page fault at the same address inside a
-    // sparse buffer arena every time (an arena page read before it was bound), then a gfx ring
-    // timeout and device lost (exit 23). It hung in 5 of 5 runs with the pipe on and in none of 4
-    // with it off; RADV_DEBUG=hang (serialized submits) also hides it, so it is a race. The root
-    // cause is still open; ORDER1886_DRAW_PIPE=1 re-enables it for that investigation.
-    // (Stage B spins while draws flow; TOport measured +18-19% with 8 and 16 threads.)
-    return false;
+    // Stage B spins while draws flow (TOport: +18-19% with 8 and 16 threads). The scheduler
+    // drain hook keeps the GPU command thread off the command buffer while it records.
+    // v0.2.28 turned it off: its constant ring's stamp queue overflowed, the ring looked full
+    // while the GPU was done, and v0.2.27 then overwrote constants still in flight (GPU page
+    // fault, device lost). ConstantRing now retires stamps as they accumulate (v0.2.30).
+    return Ps4Threads::Available() >= 8;
 }
 
 bool Rasterizer::UseDrawPipe() const {
@@ -504,8 +502,8 @@ void Rasterizer::CollectRingBindings(const Shader::Info& stage, const PreparedDr
     const auto copy = [&](u32 index, const void* source, VAddr address, u64 size) {
         const auto offset = constant_ring->Allocate(size, alignment);
         if (!offset) {
-            // Only reachable when the GPU is stalled across the whole ring; the binding
-            // keeps its previous contents for one more draw and the retry lands next frame.
+            // Only when the space is still owned by work not yet submitted (counted and logged by
+            // ConstantRing::Allocate); a full ring otherwise waits for the owning submission.
             return;
         }
         u8* dst = constant_ring->Data(*offset);
