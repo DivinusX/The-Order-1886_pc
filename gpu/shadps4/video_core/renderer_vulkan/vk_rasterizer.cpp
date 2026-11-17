@@ -499,6 +499,8 @@ void Rasterizer::CollectRingBindings(const Shader::Info& stage, const PreparedDr
     const auto copy = [&](u32 index, const void* source, VAddr address, u64 size) {
         const auto offset = constant_ring->Allocate(size, alignment);
         if (!offset) {
+            // Only reachable when the GPU is stalled across the whole ring; the binding
+            // keeps its previous contents for one more draw and the retry lands next frame.
             return;
         }
         u8* dst = constant_ring->Data(*offset);

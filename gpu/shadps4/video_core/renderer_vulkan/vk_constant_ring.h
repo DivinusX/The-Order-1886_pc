@@ -31,8 +31,10 @@ public:
         return buffer.Handle();
     }
 
-    /// Stage A: `size` bytes at `alignment`; returns the ring offset, or nullopt when the ring is
-    /// still in use by the GPU (the caller leaves the binding to stage B).
+    /// Stage A: `size` bytes at `alignment`; returns the ring offset. When the tail of the ring
+    /// is still in flight, allocation resumes at the retired frontier: the GPU has finished
+    /// everything before it, so those bytes are free. Skipping the upload instead would leave
+    /// the descriptor bound to the previous draw's data — stale world-prompt glyphs (17 Nov).
     std::optional<u64> Allocate(u64 size, u64 alignment) {
         u64 at = (position + alignment - 1) & ~(alignment - 1);
         if (at % Capacity + size > Capacity) {
@@ -42,7 +44,10 @@ public:
         if (in_use()) {
             Retire();
             if (in_use()) {
-                return std::nullopt;
+                at = (retired + alignment - 1) & ~(alignment - 1);
+                if (in_use()) {
+                    return std::nullopt; // GPU stalled across the whole ring
+                }
             }
         }
         position = at + size;
