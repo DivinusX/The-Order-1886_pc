@@ -151,6 +151,8 @@ public:
     bool LoadComputePipeline(Serialization::Archive& ar);
     bool LoadGraphicsPipeline(Serialization::Archive& ar);
     bool LoadPipelineStage(Serialization::Archive& ar, size_t stage);
+    /// Clears the per-stage replay state (infos, modules, fetch shader) in `sel`.
+    void ResetReplaySelection();
 
     const GraphicsPipeline* GetGraphicsPipeline(const DrawIndirectParams params = {},
                                                 const PreparedDraw* prepared = nullptr);

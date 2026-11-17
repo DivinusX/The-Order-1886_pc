@@ -720,7 +720,16 @@ bool ComputePipeline::SerializationSupport::Deserialize(Serialization::Archive& 
     return true;
 }
 
+void PipelineCache::ResetReplaySelection() {
+    sel.infos.fill(nullptr);
+    sel.modules.fill(nullptr);
+    sel.fetch_shader.reset();
+}
+
 bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
+    // A previous pipeline that failed half-way (missing meta, refused fallback variant, missing
+    // SPIR-V) returns without clearing its stages; never build on its leftovers.
+    ResetReplaySelection();
     compute_key.Deserialize(ar);
 
     ComputePipeline::SerializationSupport sdata{};
@@ -805,6 +814,13 @@ bool GraphicsPipeline::SerializationSupport::Deserialize(Serialization::Archive&
 }
 
 bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
+    // Every early return below leaves the stages loaded so far in `sel`. Without this reset the
+    // next replayed pipeline inherited them: a VS+PS pipeline read after a failed tessellation or
+    // geometry pipeline was created with that pipeline's stale HS/DS/GS modules and fetch shader,
+    // and RADV crashed in vkCreateGraphicsPipelines (SIGSEGV, exit 139) on every boot. Since the
+    // v0.2.26 fallback-variant refusal, failed loads are routine, so a cache this same build wrote
+    // could crash its own WarmUp.
+    ResetReplaySelection();
     sel.graphics_key.Deserialize(ar);
 
     GraphicsPipeline::SerializationSupport sdata{};
@@ -1021,6 +1037,7 @@ void PipelineCache::WarmUp(const std::function<void(u32, u32)>& progress) {
                 ++num_pipelines;
             }
         });
+    ResetReplaySelection(); // the last pipeline may have failed half-way
 
     if (pool) {
         pool->Wait(report);
