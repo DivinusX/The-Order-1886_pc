@@ -55,6 +55,14 @@ struct Profile {
     bool needs_clip_distance_emulation{};
     bool supports_shader_stencil_export{};
 
+    /// Neither barycentric extension (GTX 10 / Pascal, issue #26): a generated geometry shader
+    /// supplies the triangle corners and the barycentrics (backend/spirv/bary_emulation.h).
+    /// A function, not a member: Profile bytes are the pipeline cache's compatibility key.
+    [[nodiscard]] bool EmulatesFragmentBarycentric() const {
+        return !supports_amd_shader_explicit_vertex_parameter &&
+               !supports_fragment_shader_barycentric;
+    }
+
     bool operator==(const Profile&) const = default;
 };
 

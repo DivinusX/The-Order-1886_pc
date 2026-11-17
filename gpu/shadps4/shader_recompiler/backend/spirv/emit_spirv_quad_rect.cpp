@@ -1,8 +1,11 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <sirit/sirit.h>
 #include "shader_recompiler/backend/spirv/emit_spirv_quad_rect.h"
+#include "shader_recompiler/backend/spirv/bary_emulation.h"
+#include "shader_recompiler/info.h"
 #include "shader_recompiler/runtime_info.h"
 
 namespace Shader::Backend::SPIRV {
@@ -333,6 +336,186 @@ std::vector<u32> EmitAuxilaryTessShader(AuxShaderType type, const HwFragmentRunt
         break;
     }
     return ctx.Assemble();
+}
+
+std::vector<u32> EmitBarycentricGeometryShader(const HwFragmentRuntimeInfo& fs_rt,
+                                               const Info& fs_info, const Info& vs_info) {
+    if (vs_info.stores.GetAny(IR::Attribute::RenderTargetIndex) ||
+        vs_info.stores.GetAny(IR::Attribute::ViewportIndex)) {
+        return {};
+    }
+    const auto layout = ComputeBaryEmulation(fs_rt, fs_info);
+    if (!layout.needed || !layout.ok) {
+        return {};
+    }
+    Sirit::Module m{SPIRV_VERSION_1_5};
+    m.AddCapability(spv::Capability::Shader);
+    m.AddCapability(spv::Capability::Geometry);
+    const Id void_id{m.TypeVoid()};
+    const Id float_id{m.TypeFloat(32)};
+    const Id uint_id{m.TypeUInt(32)};
+    const Id int_id{m.TypeInt(32, true)};
+    std::array<Id, 5> vec{};
+    vec[1] = float_id;
+    for (u32 n = 2; n <= 4; ++n) {
+        vec[n] = m.TypeVector(float_id, n);
+    }
+    const auto u = [&](u32 v) { return m.Constant(uint_id, v); };
+    const Id zero{m.Constant(float_id, 0.0f)};
+    const Id one{m.Constant(float_id, 1.0f)};
+    std::vector<Id> interfaces;
+    const auto add = [&](Id type, spv::StorageClass storage) {
+        const Id var{m.AddGlobalVariable(m.TypePointer(storage, type), storage)};
+        interfaces.push_back(var);
+        return var;
+    };
+
+    // gl_PerVertex with exactly the members the vertex shader writes: declaring ClipDistance it
+    // never wrote would clip with garbage.
+    const bool point_size = vs_info.stores.GetAny(IR::Attribute::PointSize);
+    const bool clip = vs_info.stores.GetAny(IR::Attribute::ClipDistance) &&
+                      !fs_rt.clip_distance_emulation;
+    const bool cull = vs_info.stores.GetAny(IR::Attribute::CullDistance);
+    const Id dist_arr{m.TypeArray(float_id, u(8))};
+    std::vector<Id> members{vec[4]};
+    std::vector<spv::BuiltIn> builtins{spv::BuiltIn::Position};
+    if (point_size) {
+        members.push_back(float_id);
+        builtins.push_back(spv::BuiltIn::PointSize);
+    }
+    if (clip) {
+        members.push_back(dist_arr);
+        builtins.push_back(spv::BuiltIn::ClipDistance);
+    }
+    if (cull) {
+        members.push_back(dist_arr);
+        builtins.push_back(spv::BuiltIn::CullDistance);
+    }
+    const auto per_vertex_type = [&] {
+        const Id type{m.TypeStruct(members)};
+        m.Decorate(type, spv::Decoration::Block);
+        for (u32 k = 0; k < builtins.size(); ++k) {
+            m.MemberDecorate(type, k, spv::Decoration::BuiltIn, static_cast<u32>(builtins[k]));
+        }
+        return type;
+    };
+    const Id block{per_vertex_type()}; // one type for both: Sirit merges identical types
+    const Id gl_in{add(m.TypeArray(block, u(3)), spv::StorageClass::Input)};
+    const Id gl_out{add(block, spv::StorageClass::Output)};
+    const Id prim_in{add(int_id, spv::StorageClass::Input)};
+    m.Decorate(prim_in, spv::Decoration::BuiltIn, spv::BuiltIn::PrimitiveId);
+    const Id prim_out{add(int_id, spv::StorageClass::Output)};
+    m.Decorate(prim_out, spv::Decoration::BuiltIn, spv::BuiltIn::PrimitiveId);
+
+    struct Attr {
+        Id in, out;
+        u32 width;
+        bool corners;
+    };
+    std::vector<Attr> attrs;
+    const auto attribute = [&](u32 source, u32 width, s32 corners) {
+        const Id in{add(m.TypeArray(vec[width], u(3)), spv::StorageClass::Input)};
+        m.Decorate(in, spv::Decoration::Location, source);
+        const Id out{add(corners >= 0 ? m.TypeArray(vec[4], u(3)) : vec[width],
+                         spv::StorageClass::Output)};
+        m.Decorate(out, spv::Decoration::Location, corners >= 0 ? u32(corners) : source);
+        if (corners >= 0) {
+            m.Decorate(out, spv::Decoration::Flat);
+        }
+        attrs.push_back({in, out, width, corners >= 0});
+    };
+    if (layout.clip >= 0) {
+        attribute(u32(layout.clip), MaxEmulatedClipDistances, -1);
+    }
+    const u32 num_inputs = fs_rt.num_inputs - (fs_rt.clip_distance_emulation ? 1 : 0);
+    for (u32 i = 0; i < num_inputs && i < fs_rt.inputs.size(); ++i) {
+        if (layout.source[i] < 0) {
+            continue;
+        }
+        const u32 width =
+            std::clamp(fs_info.loads.NumComponents(IR::Attribute::Param0 + i), 1u, 4u);
+        attribute(u32(layout.source[i]), width, layout.corners[i]);
+    }
+    Id bary_smooth{}, bary_linear{};
+    if (layout.smooth >= 0) {
+        bary_smooth = add(vec[3], spv::StorageClass::Output);
+        m.Decorate(bary_smooth, spv::Decoration::Location, u32(layout.smooth));
+    }
+    if (layout.linear >= 0) {
+        bary_linear = add(vec[3], spv::StorageClass::Output);
+        m.Decorate(bary_linear, spv::Decoration::Location, u32(layout.linear));
+        m.Decorate(bary_linear, spv::Decoration::NoPerspective);
+    }
+
+    const Id main{m.OpFunction(void_id, spv::FunctionControlMask::MaskNone, m.TypeFunction(void_id))};
+    m.AddExecutionMode(main, spv::ExecutionMode::Triangles);
+    m.AddExecutionMode(main, spv::ExecutionMode::OutputTriangleStrip);
+    m.AddExecutionMode(main, spv::ExecutionMode::OutputVertices, 3U);
+    m.AddExecutionMode(main, spv::ExecutionMode::Invocations, 1U);
+    m.AddEntryPoint(spv::ExecutionModel::Geometry, main, "main", interfaces);
+    m.AddLabel(m.OpLabel());
+
+    const Id in_ptr{m.TypePointer(spv::StorageClass::Input, float_id)};
+    const auto widen = [&](Id value, u32 width) {
+        if (width == 4) {
+            return value;
+        }
+        std::vector<Id> parts;
+        for (u32 c = 0; c < 4; ++c) {
+            parts.push_back(c < width ? (width == 1 ? value : m.OpCompositeExtract(float_id, value, c))
+                                      : zero);
+        }
+        return m.OpCompositeConstruct(vec[4], parts);
+    };
+    // Corners are the same for all three emitted vertices: load them once.
+    std::vector<std::array<Id, 3>> corner_values(attrs.size());
+    for (size_t a = 0; a < attrs.size(); ++a) {
+        if (!attrs[a].corners) {
+            continue;
+        }
+        const Id in_vec{m.TypePointer(spv::StorageClass::Input, vec[attrs[a].width])};
+        for (u32 k = 0; k < 3; ++k) {
+            corner_values[a][k] =
+                widen(m.OpLoad(vec[attrs[a].width], m.OpAccessChain(in_vec, attrs[a].in, u(k))),
+                      attrs[a].width);
+        }
+    }
+    const Id primitive{m.OpLoad(int_id, prim_in)};
+    for (u32 v = 0; v < 3; ++v) {
+        for (u32 k = 0; k < members.size(); ++k) {
+            const Id type{members[k]};
+            const Id src{m.OpAccessChain(m.TypePointer(spv::StorageClass::Input, type), gl_in, u(v), u(k))};
+            const Id dst{m.OpAccessChain(m.TypePointer(spv::StorageClass::Output, type), gl_out, u(k))};
+            m.OpStore(dst, m.OpLoad(type, src));
+        }
+        m.OpStore(prim_out, primitive);
+        for (size_t a = 0; a < attrs.size(); ++a) {
+            if (attrs[a].corners) {
+                const Id out_vec{m.TypePointer(spv::StorageClass::Output, vec[4])};
+                for (u32 k = 0; k < 3; ++k) {
+                    m.OpStore(m.OpAccessChain(out_vec, attrs[a].out, u(k)), corner_values[a][k]);
+                }
+            } else {
+                const Id in_vec{m.TypePointer(spv::StorageClass::Input, vec[attrs[a].width])};
+                m.OpStore(attrs[a].out,
+                          m.OpLoad(vec[attrs[a].width], m.OpAccessChain(in_vec, attrs[a].in, u(v))));
+            }
+        }
+        const Id unit{m.ConstantComposite(vec[3], v == 0 ? one : zero, v == 1 ? one : zero,
+                                          v == 2 ? one : zero)};
+        if (Sirit::ValidId(bary_smooth)) {
+            m.OpStore(bary_smooth, unit);
+        }
+        if (Sirit::ValidId(bary_linear)) {
+            m.OpStore(bary_linear, unit);
+        }
+        m.OpEmitVertex();
+    }
+    m.OpEndPrimitive();
+    m.OpReturn();
+    m.OpFunctionEnd();
+    (void)in_ptr;
+    return m.Assemble();
 }
 
 } // namespace Shader::Backend::SPIRV

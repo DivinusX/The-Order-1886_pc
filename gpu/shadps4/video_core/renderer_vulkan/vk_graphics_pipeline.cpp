@@ -194,10 +194,34 @@ GraphicsPipeline::GraphicsPipeline(
         });
     }
     stage = u32(Shader::SwStage::Geometry);
+    // GPUs without fragment barycentrics (GTX 10, issue #26): a generated geometry shader hands
+    // the fragment shader its triangle corners and barycentrics (bary_emulation.h). Only for
+    // plain triangle pipelines; rect/quad lists and tessellation use sdata.tes themselves, so the
+    // generated module is serialized in that otherwise unused slot.
+    const bool triangles = topology == vk::PrimitiveTopology::eTriangleList ||
+                           topology == vk::PrimitiveTopology::eTriangleStrip ||
+                           topology == vk::PrimitiveTopology::eTriangleFan;
+    const bool bary_gs = profile.EmulatesFragmentBarycentric() && !infos[stage] &&
+                         infos[u32(Shader::SwStage::Vertex)] &&
+                         infos[u32(Shader::SwStage::Fragment)] &&
+                         !infos[u32(Shader::SwStage::TessellationControl)] &&
+                         !infos[u32(Shader::SwStage::TessellationEval)] && !is_rect_list &&
+                         !is_quad_list && triangles;
+    if (bary_gs && !preloading) {
+        sdata.tes = Shader::Backend::SPIRV::EmitBarycentricGeometryShader(
+            runtime_infos[u32(Shader::SwStage::Fragment)].hw.fs,
+            *infos[u32(Shader::SwStage::Fragment)], *infos[u32(Shader::SwStage::Vertex)]);
+    }
     if (infos[stage]) {
         shader_stages.emplace_back(vk::PipelineShaderStageCreateInfo{
             .stage = vk::ShaderStageFlagBits::eGeometry,
             .module = modules[stage],
+            .pName = "main",
+        });
+    } else if (bary_gs && !sdata.tes.empty()) {
+        shader_stages.emplace_back(vk::PipelineShaderStageCreateInfo{
+            .stage = vk::ShaderStageFlagBits::eGeometry,
+            .module = CompileSPV(sdata.tes, instance.GetDevice()),
             .pName = "main",
         });
     }

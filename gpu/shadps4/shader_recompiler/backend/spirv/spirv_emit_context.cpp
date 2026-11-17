@@ -4,6 +4,7 @@
 #include "common/assert.h"
 #include "common/div_ceil.h"
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
+#include "shader_recompiler/backend/spirv/bary_emulation.h"
 #include "shader_recompiler/frontend/fetch_shader.h"
 #include "shader_recompiler/ir/attribute.h"
 #include "shader_recompiler/ir/microinstruction.h"
@@ -351,6 +352,30 @@ void EmitContext::DefineInputs() {
         break;
     }
     case SwStage::Fragment: {
+        // GPUs without either barycentric extension: corners and barycentrics come from the
+        // generated geometry shader at the locations this layout assigns (bary_emulation.h).
+        const bool emulate_bary = profile.EmulatesFragmentBarycentric();
+        const auto bary_layout =
+            emulate_bary ? ComputeBaryEmulation(runtime_info.hw.fs, info) : BaryEmulationLayout{};
+        if (emulate_bary && bary_layout.needed && !bary_layout.ok) {
+            bary_emulation_failed = true;
+            LOG_WARNING(Render_Vulkan,
+                        "Shader {:#x}: barycentric emulation needs more than {} input locations; "
+                        "per-vertex attributes read as zero",
+                        info.pgm_hash, BaryEmulationMaxLocations);
+        }
+        const auto emulated_bary = [&](s8 location, bool linear) {
+            if (location < 0) {
+                bary_emulation_failed = true;
+                return DefineVar(F32[3], spv::StorageClass::Private, ConstantNull(F32[3]));
+            }
+            const Id id = Name(DefineInput(F32[3], u32(location)),
+                               linear ? "emulated_bary_linear" : "emulated_bary");
+            if (linear) {
+                Decorate(id, spv::Decoration::NoPerspective);
+            }
+            return id;
+        };
         if (FragmentMotion() || info.loads.GetAny(IR::Attribute::FragCoord) ||
             (info.loads.GetAny(IR::Attribute::BaryCoordPullModel) &&
              !profile.supports_amd_shader_explicit_vertex_parameter)) {
@@ -383,6 +408,8 @@ void EmitContext::DefineInputs() {
             } else if (profile.supports_fragment_shader_barycentric && !ValidId(bary_coord)) {
                 bary_coord =
                     DefineVariable(F32[3], spv::BuiltIn::BaryCoordKHR, spv::StorageClass::Input);
+            } else if (emulate_bary && !ValidId(bary_coord)) {
+                bary_coord = emulated_bary(bary_layout.smooth, false);
             }
         }
         if (info.loads.GetAny(IR::Attribute::BaryCoordPullModel)) {
@@ -392,6 +419,8 @@ void EmitContext::DefineInputs() {
             } else if (profile.supports_fragment_shader_barycentric && !ValidId(bary_coord)) {
                 bary_coord =
                     DefineVariable(F32[3], spv::BuiltIn::BaryCoordKHR, spv::StorageClass::Input);
+            } else if (emulate_bary && !ValidId(bary_coord)) {
+                bary_coord = emulated_bary(bary_layout.smooth, false);
             }
         }
         if (info.loads.GetAny(IR::Attribute::BaryCoordSmoothCentroid)) {
@@ -401,6 +430,8 @@ void EmitContext::DefineInputs() {
             } else if (profile.supports_fragment_shader_barycentric && !ValidId(bary_coord)) {
                 bary_coord =
                     DefineVariable(F32[3], spv::BuiltIn::BaryCoordKHR, spv::StorageClass::Input);
+            } else if (emulate_bary && !ValidId(bary_coord)) {
+                bary_coord = emulated_bary(bary_layout.smooth, false);
             }
         }
         if (info.loads.GetAny(IR::Attribute::BaryCoordSmoothSample)) {
@@ -410,12 +441,16 @@ void EmitContext::DefineInputs() {
             } else if (profile.supports_fragment_shader_barycentric && !ValidId(bary_coord)) {
                 bary_coord =
                     DefineVariable(F32[3], spv::BuiltIn::BaryCoordKHR, spv::StorageClass::Input);
-                // we would need sample_index to interpolate the bary_coord later
-                if (!ValidId(sample_index)) {
-                    sample_index =
-                        DefineVariable(U32[1], spv::BuiltIn::SampleId, spv::StorageClass::Input);
-                    Decorate(sample_index, spv::Decoration::Flat);
-                }
+            } else if (emulate_bary && !ValidId(bary_coord)) {
+                bary_coord = emulated_bary(bary_layout.smooth, false);
+            }
+            // KHR and emulated paths interpolate bary_coord at the sample index later, even when
+            // an earlier smooth variant already defined bary_coord.
+            if (!profile.supports_amd_shader_explicit_vertex_parameter &&
+                !ValidId(sample_index)) {
+                sample_index =
+                    DefineVariable(U32[1], spv::BuiltIn::SampleId, spv::StorageClass::Input);
+                Decorate(sample_index, spv::Decoration::Flat);
             }
         }
         if (info.loads.GetAny(IR::Attribute::BaryCoordNoPersp)) {
@@ -425,6 +460,10 @@ void EmitContext::DefineInputs() {
             } else if (profile.supports_fragment_shader_barycentric) {
                 bary_coord_nopersp = DefineVariable(F32[3], spv::BuiltIn::BaryCoordNoPerspKHR,
                                                     spv::StorageClass::Input);
+            } else if (emulate_bary) {
+                bary_coord_nopersp = ValidId(bary_coord_nopersp_sample)
+                                         ? bary_coord_nopersp_sample
+                                         : emulated_bary(bary_layout.linear, true);
             }
         }
         if (info.loads.GetAny(IR::Attribute::BaryCoordNoPerspSample)) {
@@ -435,6 +474,11 @@ void EmitContext::DefineInputs() {
                 bary_coord_nopersp_sample = DefineVariable(
                     F32[3], spv::BuiltIn::BaryCoordNoPerspKHR, spv::StorageClass::Input);
                 // Decorate(bary_coord_nopersp_sample, spv::Decoration::Sample);
+            } else if (emulate_bary) {
+                // Like the KHR path, the linear sample variant reads the center value.
+                bary_coord_nopersp_sample = ValidId(bary_coord_nopersp)
+                                                ? bary_coord_nopersp
+                                                : emulated_bary(bary_layout.linear, true);
             }
         }
 
@@ -451,6 +495,22 @@ void EmitContext::DefineInputs() {
             const u32 num_components = info.loads.NumComponents(param);
             const auto [primary, auxiliary] = info.fs_interpolation[i];
             const Id type = F32[num_components];
+            if (primary == Qualifier::PerVertex && emulate_bary) {
+                // The geometry shader writes the three corners to consecutive flat locations.
+                if (bary_layout.ok) {
+                    const Id corners = Name(DefineInput(TypeArray(F32[4], ConstU32(3U)),
+                                                        u32(bary_layout.corners[i])),
+                                            fmt::format("fs_in_attr{}_corners", i));
+                    Decorate(corners, spv::Decoration::Flat);
+                    input_params[i] = GetAttributeInfo(AmdGpu::NumberFormat::Float, corners, 4,
+                                                       false, false, true);
+                } else {
+                    input_params[i] = GetAttributeInfo(AmdGpu::NumberFormat::Float, Id{}, 4,
+                                                       false, true, true);
+                    input_params[i].id_array.fill(ConstantNull(F32[4]));
+                }
+                continue;
+            }
             const Id attr_id = [&] {
                 const auto bind_location = input.param_index + (has_clip_distance_inputs ? 1 : 0);
                 if (primary == Qualifier::PerVertex &&

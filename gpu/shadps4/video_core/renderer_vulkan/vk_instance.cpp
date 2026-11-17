@@ -387,14 +387,20 @@ bool Instance::CreateDevice() {
     }
     // ORDER1886_AMD_PATHS_OFF=shaderext leaves the AMD shader extensions out (vk_amd_paths.h).
     const auto amd_paths_off = AmdPathsOff::Current();
+    // ORDER1886_PERF_DIAG=nobary: behave like a GPU without either barycentric extension
+    // (GTX 10 / Pascal, issue #26), to exercise the geometry-shader fallback on any GPU.
+    const bool no_barycentrics = [] {
+        const char* v = std::getenv("ORDER1886_PERF_DIAG");
+        return v && std::strstr(v, "nobary");
+    }();
     amd_shader_explicit_vertex_parameter =
-        !amd_paths_off.shaderext &&
+        !amd_paths_off.shaderext && !no_barycentrics &&
         add_extension(VK_AMD_SHADER_EXPLICIT_VERTEX_PARAMETER_EXTENSION_NAME);
-    if (!amd_shader_explicit_vertex_parameter) {
+    if (!amd_shader_explicit_vertex_parameter && !no_barycentrics) {
         fragment_shader_barycentric =
             add_extension(VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME);
     }
-    if (amd_paths_off.shaderext) {
+    if (amd_paths_off.shaderext || no_barycentrics) {
         std::printf("GPU: fragment barycentrics: %s\n",
                     fragment_shader_barycentric ? "VK_KHR_fragment_shader_barycentric" : "none");
     }

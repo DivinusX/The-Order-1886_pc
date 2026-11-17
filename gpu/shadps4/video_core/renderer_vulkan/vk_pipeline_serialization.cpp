@@ -949,37 +949,46 @@ bool PipelineCache::CheckCacheProfile() {
 
     Storage::DataBase::Instance().Open();
 
-    // Check if cache is compatible
+    // The profile bytes key the cache to this build and GPU. GPUs that emulate fragment
+    // barycentrics (GTX 10, issue #26) append a marker byte: their caches from before the
+    // emulation hold shaders compiled without it (silhouettes) and must not replay, while every
+    // other GPU keeps its cache.
+    std::vector<u8> expected(sizeof(profile));
+    std::memcpy(expected.data(), &profile, sizeof(profile));
+    if (profile.EmulatesFragmentBarycentric()) {
+        expected.push_back(0xB7);
+    }
+
     std::vector<u8> profile_data{};
     Storage::DataBase::Instance().Load(Storage::BlobType::ShaderProfile, "profile", profile_data);
     if (profile_data.empty()) {
         Storage::DataBase::Instance().FinishPreload();
-
-        profile_data.resize(sizeof(profile));
-        std::memcpy(profile_data.data(), &profile, sizeof(profile));
         Storage::DataBase::Instance().Save(Storage::BlobType::ShaderProfile, "profile",
-                                           std::move(profile_data));
+                                           std::vector<u8>(expected));
         return false;
     }
-    if (profile_data.size() != sizeof(Shader::Profile)) {
-        LOG_WARNING(Render, "Pipeline cache profile has unexpected size ({} != {})",
-                    profile_data.size(), sizeof(Shader::Profile));
-    }
-    Shader::Profile cached_profile{};
-    if (profile_data.size() == sizeof(Shader::Profile)) {
+    // Member-wise, not bytewise: Profile has padding whose bytes are not guaranteed.
+    const bool compatible = [&] {
+        if (profile_data.size() != expected.size()) {
+            return false;
+        }
+        Shader::Profile cached_profile{};
         std::memcpy(&cached_profile, profile_data.data(), sizeof(cached_profile));
-    }
-    if (profile_data.size() != sizeof(Shader::Profile) || cached_profile != profile) {
+        return cached_profile == profile;
+    }();
+    if (!compatible) {
+        if (profile_data.size() != expected.size()) {
+            LOG_WARNING(Render, "Pipeline cache profile has unexpected size ({} != {})",
+                        profile_data.size(), expected.size());
+        }
         // upstream closed the cache for the session here, so it was never rewritten
         // and every later session compiled every shader again (stutters on each new area).
         // Start a fresh cache for this build and GPU instead.
         LOG_WARNING(Render, "Pipeline cache isn't compatible with current system: rebuilding it");
         Storage::DataBase::Instance().Clear();
         Storage::DataBase::Instance().FinishPreload();
-        profile_data.resize(sizeof(profile));
-        std::memcpy(profile_data.data(), &profile, sizeof(profile));
         Storage::DataBase::Instance().Save(Storage::BlobType::ShaderProfile, "profile",
-                                           std::move(profile_data));
+                                           std::vector<u8>(expected));
         return false;
     }
     return true;

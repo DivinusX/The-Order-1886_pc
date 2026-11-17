@@ -8,6 +8,7 @@
 
 namespace Shader {
 struct HwFragmentRuntimeInfo;
+struct Info;
 }
 
 namespace Shader::Backend::SPIRV {
@@ -20,5 +21,13 @@ enum class AuxShaderType : u32 {
 
 [[nodiscard]] std::vector<u32> EmitAuxilaryTessShader(AuxShaderType type,
                                                       const HwFragmentRuntimeInfo& fs_info);
+
+/// Geometry shader for fragment barycentric emulation (bary_emulation.h): passes the vertex
+/// shader's outputs through, writes each per-vertex fragment input's three corners to their
+/// flat locations and the barycentrics as unit vectors at the corners. Empty when the vertex
+/// shader writes Layer or ViewportIndex (a geometry shader cannot read them back).
+[[nodiscard]] std::vector<u32> EmitBarycentricGeometryShader(const HwFragmentRuntimeInfo& fs_rt,
+                                                             const Info& fs_info,
+                                                             const Info& vs_info);
 
 } // namespace Shader::Backend::SPIRV

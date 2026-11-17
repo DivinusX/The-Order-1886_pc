@@ -310,6 +310,8 @@ public:
     Id bary_coord_pull_model{};
     Id bary_coord_nopersp{};
     Id bary_coord_nopersp_sample{};
+    /// Emulated barycentrics could not get input locations (bary_emulation.h): reads are zero.
+    bool bary_emulation_failed{};
 
     struct TextureDefinition {
         const VectorIds* data_types;

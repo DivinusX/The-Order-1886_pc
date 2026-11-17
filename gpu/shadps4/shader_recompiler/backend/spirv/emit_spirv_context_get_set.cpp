@@ -108,8 +108,9 @@ Id EmitGetAttribute(EmitContext& ctx, IR::Attribute attr, u32 comp, u32 index) {
         }();
         return param.is_integer ? ctx.OpBitcast(ctx.F32[1], value) : value;
     }
+    // KHR and emulated barycentrics are (b0, b1, b2); the guest reads the AMD (I, J) pair.
     if (IR::IsBarycentricCoord(attr) && attr != IR::Attribute::BaryCoordPullModel &&
-        ctx.profile.supports_fragment_shader_barycentric) {
+        !ctx.profile.supports_amd_shader_explicit_vertex_parameter) {
         ++comp;
     }
     switch (attr) {
@@ -154,6 +155,8 @@ Id EmitGetAttribute(EmitContext& ctx, IR::Attribute attr, u32 comp, u32 index) {
             return ctx.OpLoad(ctx.F32[1],
                               ctx.OpAccessChain(ctx.input_f32, ctx.bary_coord_smooth_centroid,
                                                 ctx.ConstU32(comp)));
+        } else if (ctx.bary_emulation_failed) {
+            return ctx.OpCompositeExtract(ctx.F32[1], ctx.OpLoad(ctx.F32[3], ctx.bary_coord), comp);
         } else {
             return ctx.OpCompositeExtract(
                 ctx.F32[1], ctx.OpInterpolateAtCentroid(ctx.F32[3], ctx.bary_coord), comp);
@@ -163,6 +166,8 @@ Id EmitGetAttribute(EmitContext& ctx, IR::Attribute attr, u32 comp, u32 index) {
             return ctx.OpLoad(
                 ctx.F32[1],
                 ctx.OpAccessChain(ctx.input_f32, ctx.bary_coord_smooth_sample, ctx.ConstU32(comp)));
+        } else if (ctx.bary_emulation_failed) {
+            return ctx.OpCompositeExtract(ctx.F32[1], ctx.OpLoad(ctx.F32[3], ctx.bary_coord), comp);
         } else {
             return ctx.OpCompositeExtract(
                 ctx.F32[1],

@@ -102,23 +102,17 @@ void Translator::V_INTERP_MOV_F32(const GcnInst& inst) {
     auto& interp = info.fs_interpolation[attr_index];
     const u32 src_select = inst.src[0].code;
     ASSERT_MSG(src_select < 3, "Invalid V_INTERP_MOV_F32 selector {}", src_select);
-    ASSERT(attr.is_flat || src_select == 2 ||
-           profile.supports_amd_shader_explicit_vertex_parameter ||
-           profile.supports_fragment_shader_barycentric);
-    if (profile.supports_amd_shader_explicit_vertex_parameter ||
-        profile.supports_fragment_shader_barycentric) {
-        // VSRC 0=P10, 1=P20, 2=P0
-        interp.primary = Qualifier::PerVertex;
-        IR::F32 result = ir.GetAttribute(attrib, inst.control.vintrp.chan, (src_select + 1) % 3);
-        if (src_select != 2 && !attr.IsPassthrough()) {
-            const IR::F32 p0 = ir.GetAttribute(attrib, inst.control.vintrp.chan, 0);
-            result = ir.FPSub(result, p0);
-        }
-        SetDst(inst.dst[0], result);
-    } else {
-        interp.primary = Qualifier::Flat;
-        SetDst(inst.dst[0], ir.GetAttribute(attrib, inst.control.vintrp.chan));
+    // Every profile reaches the corners: natively (AMD, KHR) or through the generated geometry
+    // shader (backend/spirv/bary_emulation.h). The old flat fallback read P0 for every corner,
+    // which turned The Order's packed materials into silhouettes on GTX 10 (issue #26).
+    // VSRC 0=P10, 1=P20, 2=P0
+    interp.primary = Qualifier::PerVertex;
+    IR::F32 result = ir.GetAttribute(attrib, inst.control.vintrp.chan, (src_select + 1) % 3);
+    if (src_select != 2 && !attr.IsPassthrough()) {
+        const IR::F32 p0 = ir.GetAttribute(attrib, inst.control.vintrp.chan, 0);
+        result = ir.FPSub(result, p0);
     }
+    SetDst(inst.dst[0], result);
 }
 
 } // namespace Shader::Gcn
