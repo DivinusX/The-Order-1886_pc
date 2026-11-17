@@ -191,6 +191,31 @@ def runtime_identity(runtime):
     return {'runtime': str(runtime), 'runtime_sha256': digest, 'build': build}
 
 
+def failure_detail(log_text, limit=5):
+    """The lines that say why the GPU library stopped, for the launcher and last-run.json.
+
+    The runtime's own STOP line only says "see GPU log above", and players paste the launcher
+    output, not the boot log (issue #18). Returns the last assertion with the message that
+    follows it, or the last host fault with its first frames; [] when neither is present.
+    """
+    lines = log_text.splitlines()
+    for index in range(len(lines) - 1, -1, -1):
+        if 'Assertion Failed' in lines[index]:
+            detail = [lines[index]]
+            for follow in lines[index + 1:index + 4]:
+                if follow.startswith('STOP:') or not follow.strip():
+                    break
+                detail.append(follow)
+            # The driver often explains a lost device on the line before (radv: "context is lost").
+            if index and any(name in lines[index - 1].lower() for name in ('radv', 'amdgpu', 'nvidia')):
+                detail.insert(0, lines[index - 1])
+            return [line.strip()[:300] for line in detail[:limit]]
+        if lines[index].startswith('Host fault'):
+            frames = [line for line in lines[index + 1:index + 12] if line.lstrip().startswith('#')]
+            return [line.strip()[:300] for line in ([lines[index]] + frames)[:limit]]
+    return []
+
+
 def write_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1016,6 +1041,7 @@ def main(argv=None):
             stops = [line for line in tail.splitlines() if 'STOP:' in line or 'unresolved' in line.lower()]
             closed = [line for line in tail.splitlines() if line.startswith('Window: closed by user')]
             report['stop_reason'] = stops[-1] if stops else closed[-1] if closed else None
+            report['failure_detail'] = failure_detail(tail) if report['exit_code'] else []
             report['status'] = ('timed_out' if report['timed_out'] else
                                 'stopped' if report.get('stop_requested') else
                                 'failed' if report['exit_code'] else 'process_exited')
@@ -1023,6 +1049,8 @@ def main(argv=None):
             write_json(logs / 'last-run.json', report)
             if missing:
                 emit_status(f'Import audit: {report["missing_imports"]} missing.', fallback=diagnostic_log)
+            for line in report['failure_detail']:
+                emit_status(f'GPU log: {line}', fallback=diagnostic_log)
             if report['stop_reason']:
                 emit_status(report['stop_reason'], fallback=diagnostic_log)
             emit_status(f'Runtime {report["status"]}; exit {report["exit_code"]}. Log: {log}', fallback=diagnostic_log)
