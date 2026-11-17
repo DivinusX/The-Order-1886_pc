@@ -257,6 +257,8 @@ static ABI int32_t msg_status(void) { return dialog_status(1); }
 static ABI int32_t msg_term(void) { return dialog_term(1); }
 static ABI int32_t msg_close(void) { return dialog_close(1); }
 static ABI int32_t msg_progress(uint32_t target, uint32_t value) { (void)value; return dialog_progress(1,target); }
+/* The bar's caption: same validation as setting its value (the overlay draws no caption). */
+static ABI int32_t msg_progress_text(uint32_t target, const char *text) { (void)text; return dialog_progress(1,target); }
 static ABI int32_t msg_result(unsigned char *out) { return dialog_result(1,out,0); }
 /* SaveDataDialog. OrbisSaveDataDialogParam: BaseParam (48), size, mode @52, dispType @56,
  * animParam @64, items @72, ..., userData @112. SaveDialogItems: userId @0, titleId @8,
@@ -387,6 +389,8 @@ TRACE_DIALOG(msg_close,"sceMsgDialogClose",1,0,(void),(),"%s","")
 TRACE_DIALOG(msg_progress,"sceMsgDialogProgressBarSetValue",1,1,(uint32_t target,uint32_t value),
              (target,value),"target=%u value=%u",target,value)
 TRACE_DIALOG(msg_result,"sceMsgDialogGetResult",1,0,(unsigned char *out),(out),"result_ptr=%p",(void *)out)
+TRACE_DIALOG(msg_progress_text,"sceMsgDialogProgressBarSetMsg",1,1,(uint32_t target,const char *text),
+             (target,text),"target=%u text=%s",target,text ? text : "(null)")
 TRACE_DIALOG(save_init,"sceSaveDataDialogInitialize",2,0,(void),(),"%s","")
 TRACE_DIALOG(save_open,"sceSaveDataDialogOpen",2,0,(const unsigned char *p),(p),
              "param=%p mode=%u",(const void *)p,trace_dialog_mode(2,p,52))
@@ -418,6 +422,15 @@ static ABI int32_t ime_keyboard_open(int32_t user,const ImeKeyboardParam *param)
     /* shortcut: no PS4 USB keyboard device, add a backend before accepting a listener. */
     note("IME USB keyboard unavailable (CONNECTION_FAILED); SDL pad keyboard remains available");
     return (int32_t)0x80BC0004;
+}
+
+/* No PS4 USB keyboard is ever opened (ime_keyboard_open reports CONNECTION_FAILED): there is no
+ * event to deliver and nothing to close, and its resource ids do not exist. */
+static ABI int32_t ime_update(void (ABI *handler)(void *,const void *)) { (void)handler; return 0; }
+static ABI int32_t ime_keyboard_close(int32_t user) { (void)user; return 0; }
+static ABI int32_t ime_keyboard_resource_id(int32_t user,void *ids) {
+    (void)user; (void)ids;
+    return (int32_t)0x80BC0004; /* CONNECTION_FAILED, as from sceImeKeyboardOpen */
 }
 
 /* ImeDialog: text typed on the keyboard into the game window (title bar shows it).
@@ -581,6 +594,22 @@ static ABI int32_t playgo_close(int32_t handle) {
     playgo_handle=0; return 0;
 }
 static ABI int32_t playgo_terminate(void) { playgo_handle=0; return 0; }
+/* Fully installed: nothing left to download (ETA 0) and nothing to prefetch. */
+static ABI int32_t playgo_eta(int32_t handle,const uint16_t *ids,uint32_t count,uint64_t *eta) {
+    if (handle!=playgo_handle || !handle) return PLAYGO_BAD_HANDLE;
+    if (!ids || !eta) return PLAYGO_BAD_POINTER;
+    if (!count) return PLAYGO_BAD_SIZE;
+    for (uint32_t i=0;i<count;++i) if (ids[i]>=playgo_chunks) return PLAYGO_BAD_CHUNK;
+    *eta=0; return 0;
+}
+static ABI int32_t playgo_prefetch(int32_t handle,const uint16_t *ids,uint32_t count,int32_t minimum) {
+    (void)minimum;
+    if (handle!=playgo_handle || !handle) return PLAYGO_BAD_HANDLE;
+    if (!ids) return PLAYGO_BAD_POINTER;
+    if (!count) return PLAYGO_BAD_SIZE;
+    for (uint32_t i=0;i<count;++i) if (ids[i]>=playgo_chunks) return PLAYGO_BAD_CHUNK;
+    return 0;
+}
 
 /* ---- DiscMap: the game is fully installed, no disc bitmap exists ---- */
 #define DISC_MAP_NO_BITMAP ((int32_t)0x81100004)
@@ -714,7 +743,11 @@ static const RuntimeExport exports[]={
     {"sceNpCommerceDialogUpdateStatus",commerce_status}, {"sceNpCommerceDialogTerminate",commerce_term},
     {"sceImeDialogInit",ime_init}, {"sceImeDialogGetStatus",ime_status}, {"sceImeDialogGetResult",ime_result},
     {"sceImeDialogTerm",ime_term}, {"sceImeDialogAbort",ime_term},
-    {"sceImeKeyboardOpen",ime_keyboard_open},
+    {"sceImeKeyboardOpen",ime_keyboard_open}, {"sceImeUpdate",ime_update},
+    {"sceImeKeyboardClose",ime_keyboard_close}, {"sceImeKeyboardGetResourceId",ime_keyboard_resource_id},
+    {"sceMsgDialogProgressBarSetMsg",trace_msg_progress_text},
+    {"sceScreenShotEnable",ok_void}, {"sceScreenShotDisable",ok_void},
+    {"sceVideoRecordingSetInfo",ok_void},
     {"sceNpTrophyCreateContext",trophy_context}, {"sceNpTrophyCreateHandle",trophy_handle},
     {"sceNpTrophyRegisterContext",trophy_register}, {"sceNpTrophyUnlockTrophy",trophy_unlock},
     {"sceNpTrophyGetGameInfo",trophy_game_info}, {"sceNpTrophyGetTrophyInfo",trophy_info},
@@ -724,6 +757,7 @@ static const RuntimeExport exports[]={
     {"scePlayGoGetLocus",playgo_locus}, {"scePlayGoSetInstallSpeed",playgo_speed},
     {"scePlayGoGetInstallSpeed",playgo_get_speed}, {"scePlayGoGetProgress",playgo_progress},
     {"scePlayGoSetToDoList",playgo_todo}, {"scePlayGoClose",playgo_close}, {"scePlayGoTerminate",playgo_terminate},
+    {"scePlayGoGetEta",playgo_eta}, {"scePlayGoPrefetch",playgo_prefetch},
     {"sceMouseInit",ok_void}, {"sceMouseOpen",mouse_open}, {"sceMouseRead",mouse_read}, {"sceMouseClose",mouse_close},
     {"sceAudioInOpen",audio_in_open},
     {"sceDiscMapIsRequestOnHDD",discmap_on_hdd}, {"sceDiscMap_8A828CAEE7EDD5E9",discmap_8a82},

@@ -440,7 +440,7 @@ uintptr_t runtime_thread_resolve(const char *name) {
         {"FJrT5LuUBAU#libkernel",thread_exit},
         {"Xs9hdiD7sAA#libkernel",posix_thread_set_schedparam},
         {"P41kTWUS3EI#libkernel",thread_get_schedparam},
-        {"oIRFTjoILBg#libkernel",thread_set_schedparam},
+        {"oIRFTjoILbg#libkernel",thread_set_schedparam},
     };
     for (size_t i=0;i<sizeof(table)/sizeof(*table);++i)
         if (!strcmp(name,table[i].nid)) return (uintptr_t)table[i].fn;

@@ -273,6 +273,16 @@ static const struct { const char *nid, *symbol; } import_names[]={
     {"JTvBflhYazQ#libkernel","sceKernelWaitEventFlag"},
     {"9lvj5DjHZiA#libkernel","sceKernelPollEventFlag"},
     {"PZku4ZrXJqg#libkernel","sceKernelCancelEventFlag"},
+    /* Imports The Order makes that the launcher's file check listed as missing (issue #14). */
+    {"2xxUtuC-RzE#libSceScreenShot","sceScreenShotEnable"},
+    {"tIYf0W5VTi8#libSceScreenShot","sceScreenShotDisable"},
+    {"Fc8qxlKINYQ#libSceVideoRecording","sceVideoRecordingSetInfo"},
+    {"6H-71OdrpXM#libSceMsgDialog","sceMsgDialogProgressBarSetMsg"},
+    {"v6EZ-YWRdMs#libScePlayGo","scePlayGoGetEta"},
+    {"-Q1-u1a7p0g#libScePlayGo","scePlayGoPrefetch"},
+    {"-4GCfYdNF1s#libSceIme","sceImeUpdate"},
+    {"PMVehSlfZ94#libSceIme","sceImeKeyboardClose"},
+    {"dKadqZFgKKQ#libSceIme","sceImeKeyboardGetResourceId"},
 };
 /* Symbol name for a known library-scoped NID, or NULL for unknown imports. */
 const char *runtime_symbol(const char *nid) {
