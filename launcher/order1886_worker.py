@@ -120,13 +120,6 @@ class Worker:
             values.update(imported)
             with self.state_lock():
                 legacy.save_settings(self.state / "settings.json", values)
-        # v0.2.30: asynchronous shaders broke the world-prompt glyph and are off by default now.
-        # Settings saved by earlier versions pin them on. Report them off (in memory: reading
-        # never rewrites settings.json); the marker is saved with the player's next change, after
-        # which their choice is respected.
-        if values.get("async_shaders_v0230") != 1:
-            values["async_shaders"] = False
-            values["async_shaders_v0230"] = 1
         return values
 
     def readback_policy_reason(self, values, policy):
