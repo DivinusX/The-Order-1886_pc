@@ -131,6 +131,11 @@ done
 echo "Providers built: out/order1886_fsr3.so out/order1886_fsr4.so"
 # $ORIGIN/gpu: packaged copies keep the library next to the binary without patching it.
 gpu=(-Lout/gpu -lps4gpu -Wl,-rpath,'$ORIGIN/gpu' -Wl,-rpath,"$PWD/out/gpu" -rdynamic)
+# Local CachyOS build (no nix-shell, deps from the extracted tree): the runtime executable
+# must resolve Zydis symbols itself; libps4gpu.so keeps them undefined on purpose.
+if [[ -n ${ORDER1886_DEPS_LIB:-} ]]; then
+    gpu+=(-L"$ORDER1886_DEPS_LIB" -lZydis -lZycore)
+fi
 runtime=(src/runtime*.c)
 # Third-party decoders: compiled once, without this project's -Werror policy.
 atrac9=(third_party/LibAtrac9/C/src/*.c)

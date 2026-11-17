@@ -679,9 +679,12 @@ bool LoadShaderMeta(Serialization::Archive& ar, Shader::Info& info, Shader::Info
         return false;
     }
 
-    // Variants whose extended-userdata flattening failed read the canonical guest tables;
-    // replaying them binds the layout the meta describes, not the one the binary uses —
-    // world-prompt glyphs rendered invisible this way. Always recompile them instead.
+    // Variants whose extended-userdata flattening failed read the canonical guest
+    // tables through bindings the meta cannot faithfully describe; replaying them
+    // at least renders world-prompt glyphs invisible, and was seen to crash
+    // pipeline creation in the Vulkan driver (unverified: that repro mixed caches
+    // between two compiler toolchains, so the crash evidence is contaminated -
+    // re-test with one toolchain before changing this guard). They compile fresh.
     if (effective_info.srt_offset_fallback) {
         return false;
     }
