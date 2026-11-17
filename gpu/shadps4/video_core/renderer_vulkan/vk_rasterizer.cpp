@@ -829,9 +829,6 @@ void Rasterizer::RunDrawPacket(void* context, const u8* data, u32 size) {
     }
     Shader::Info::num_ud_snapshots = 0;
     self.num_ring_stages = 0;
-    if (self.constant_ring) {
-        self.constant_ring->Stamp(packet.ring_end);
-    }
 }
 
 void Rasterizer::PrintPipeStats() {
