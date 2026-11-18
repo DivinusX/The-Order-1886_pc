@@ -30,6 +30,7 @@ GpuProfiler::GpuProfiler(const Instance& instance, Scheduler& scheduler_)
         k.reserve(SliceQueries);
     }
     std::printf("GPU profile: on (timestamp period %.2f ns)\n", period_ns);
+    std::fflush(stdout);
 }
 
 void GpuProfiler::WriteTimestamp(u64 key) {
@@ -109,6 +110,7 @@ void GpuProfiler::Print() {
         std::printf("  %6.3f ms/frame %5.1f/frame  %s\n", total.ms / frames,
                     double(total.segments) / frames, described[key].c_str());
     }
+    std::fflush(stdout); // stdout is the boot log file: block-buffered
     totals.clear();
     frames = 0;
 }

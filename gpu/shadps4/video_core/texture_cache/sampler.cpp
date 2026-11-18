@@ -17,16 +17,30 @@ Sampler::Sampler(const Vulkan::Instance& instance, const AmdGpu::Sampler& sample
                                  AmdGpu::IsAnisoFilter(sampler.xy_min_filter);
     // the menu's anisotropic filtering, on filtered and mipmapped textures (not on
     // point-sampled lookups, unmipmapped render targets or depth compares).
-    const int forced = Ps4Settings::Get().startup_anisotropy;
+    // The Quality menu's anisotropy (when set) replaces the launcher's and also caps the game's
+    // own anisotropic samplers, so Low really costs less.
+    const auto& settings = Ps4Settings::Get();
+    const int quality_aniso = settings.quality_anisotropy;
+    const int forced = quality_aniso > 0 ? quality_aniso : settings.startup_anisotropy;
     const bool force_anisotropy = forced > 1 && !is_depth &&
                                   sampler.xy_min_filter != AmdGpu::Filter::Point &&
                                   sampler.mip_filter != AmdGpu::MipFilter::None;
     const bool anisotropy_enable =
         instance.IsAnisotropicFilteringSupported() && (game_anisotropy || force_anisotropy);
-    const float requested = std::max(game_anisotropy ? sampler.MaxAniso() : 1.0f,
-                                     force_anisotropy ? float(forced) : 1.0f);
+    float game_aniso = game_anisotropy ? sampler.MaxAniso() : 1.0f;
+    if (quality_aniso > 0) game_aniso = std::min(game_aniso, float(quality_aniso));
+    const float requested = std::max(game_aniso, force_anisotropy ? float(forced) : 1.0f);
     const float max_anisotropy =
         anisotropy_enable ? std::clamp(requested, 1.0f, instance.MaxSamplerAnisotropy()) : 1.0f;
+    // Texture quality: mipmapped colour textures start this many levels down (less memory
+    // bandwidth, softer surfaces). Render targets (one level), point lookups and depth
+    // compares keep the game's own range.
+    float min_lod = sampler.MinLod(), max_lod = sampler.MaxLod();
+    const int skip = 2 - std::clamp(settings.texture_quality.load(), 0, 2);
+    if (skip > 0 && !is_depth && sampler.mip_filter != AmdGpu::MipFilter::None && max_lod > 0.0f) {
+        min_lod = std::max(min_lod, float(skip));
+        max_lod = std::max(max_lod, min_lod);
+    }
     auto border_color = LiverpoolToVK::BorderColor(sampler.border_color_type);
     if (border_color == vk::BorderColor::eFloatCustomEXT &&
         !instance.IsCustomBorderColorSupported()) {
@@ -64,8 +78,8 @@ Sampler::Sampler(const Vulkan::Instance& instance, const AmdGpu::Sampler& sample
         // GCN compares per instruction; a plain read of a compare sampler is undefined in Vulkan.
         .compareEnable = is_depth,
         .compareOp = LiverpoolToVK::DepthCompare(sampler.depth_compare_func),
-        .minLod = sampler.MinLod(),
-        .maxLod = sampler.MaxLod(),
+        .minLod = min_lod,
+        .maxLod = max_lod,
         .borderColor = border_color,
         .unnormalizedCoordinates = false, // Handled in shader due to Vulkan limitations.
     };

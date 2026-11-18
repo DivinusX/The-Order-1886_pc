@@ -6,6 +6,7 @@
 #include "video_core/amdgpu/liverpool.h"
 
 #include "ps4_toggles.h"
+#include "ps4_settings.h"
 #include "common/assert.h"
 #include "common/debug.h"
 #include "common/div_ceil.h"
@@ -1343,6 +1344,9 @@ vk::Sampler TextureCache::GetSampler(const AmdGpu::Sampler& sampler,
     // Compare and plain uses of one S# need separate samplers; so do extra LOD biases.
     u64 hash = HashCombine(HashCombine(XXH3_64bits(&sampler, sizeof(sampler)), is_depth),
                            u64(std::bit_cast<u32>(extra_lod_bias)));
+    // The Quality menu (texture quality, anisotropy) makes new samplers when it changes; the old
+    // ones age out of the LRU.
+    hash = HashCombine(hash, u64(Ps4Settings::Get().quality_generation.load(std::memory_order_relaxed)));
     if (custom_border_color) {
         hash = HashCombine(hash, XXH3_64bits(custom_border_color->data(),
                                              sizeof(*custom_border_color)));

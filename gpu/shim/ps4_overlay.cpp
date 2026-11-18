@@ -400,12 +400,190 @@ void LoadingScreen() {
     ImGui::End();
 }
 
-void FpsCounter() {
-    const auto& s = Ps4Settings::Get();
-    const std::string text = OverlayText();
-    if (text.empty()) {
+// ---- Performance overlay card -------------------------------------------------------------
+// A hardware panel in the style of modern game overlays: the frame rate large and coloured
+// against the frame-rate limit, a frame-time graph, then GPU and CPU (load and temperature)
+// and memory. Rows this PC cannot measure are left out instead of showing "n/a"; the
+// overlay items in the settings choose which rows appear (temperatures always do when known).
+constexpr ImVec4 kText{0.93f, 0.94f, 0.97f, 1.0f};
+constexpr ImVec4 kDim{0.60f, 0.64f, 0.72f, 1.0f};
+constexpr ImVec4 kGpuAccent{0.40f, 0.78f, 1.00f, 1.0f};
+constexpr ImVec4 kCpuAccent{0.72f, 0.56f, 1.00f, 1.0f};
+constexpr ImVec4 kMemAccent{0.36f, 0.86f, 0.74f, 1.0f};
+constexpr ImVec4 kTrack{1.0f, 1.0f, 1.0f, 0.10f};
+
+ImVec4 TierColor(Ps4PerfStats::Tier tier) {
+    switch (tier) {
+    case Ps4PerfStats::Tier::Good: return {0.38f, 0.88f, 0.56f, 1.0f};
+    case Ps4PerfStats::Tier::Warn: return {1.00f, 0.77f, 0.32f, 1.0f};
+    default: return {1.00f, 0.40f, 0.40f, 1.0f};
+    }
+}
+
+// Host frame intervals for the graph (the overlay draws once per presented frame).
+struct FrameHistory {
+    static constexpr int Size = 120;
+    float ms[Size]{};
+    int head = 0, count = 0;
+    void Push(float value) {
+        ms[head] = value;
+        head = (head + 1) % Size;
+        count = std::min(count + 1, Size);
+    }
+    float At(int i) const { return ms[(head - count + i + Size) % Size]; } // oldest first
+};
+FrameHistory frame_history;
+
+void Meter(float fraction, float width, const ImVec4& color) {
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float h = std::max(3.0f, ImGui::GetFontSize() * 0.28f);
+    draw->AddRectFilled(p, ImVec2(p.x + width, p.y + h), ImGui::GetColorU32(kTrack), h * 0.5f);
+    const float f = std::clamp(fraction, 0.0f, 1.0f);
+    if (f > 0.0f) {
+        draw->AddRectFilled(p, ImVec2(p.x + std::max(width * f, h), p.y + h), ImGui::GetColorU32(color),
+                            h * 0.5f);
+    }
+    ImGui::Dummy(ImVec2(width, h));
+}
+
+void FrameGraph(float width, float target_ms) {
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float h = ImGui::GetFontSize() * 2.2f;
+    draw->AddRectFilled(p, ImVec2(p.x + width, p.y + h), ImGui::GetColorU32(ImVec4(1, 1, 1, 0.04f)),
+                        ImGui::GetFontSize() * 0.3f);
+    const int n = frame_history.count;
+    float top = target_ms * 2.0f;
+    for (int i = 0; i < n; ++i) top = std::max(top, frame_history.At(i));
+    const auto y_of = [&](float ms) { return p.y + h - 2.0f - (h - 4.0f) * std::clamp(ms / top, 0.0f, 1.0f); };
+    // the frame-time budget of the frame-rate limit
+    const float target_y = y_of(target_ms);
+    draw->AddLine(ImVec2(p.x, target_y), ImVec2(p.x + width, target_y),
+                  ImGui::GetColorU32(ImVec4(1, 1, 1, 0.18f)), 1.0f);
+    if (n >= 2) {
+        const float step = width / float(FrameHistory::Size - 1);
+        const float x0 = p.x + width - step * float(n - 1);
+        ImVec2 prev(x0, y_of(frame_history.At(0)));
+        for (int i = 1; i < n; ++i) {
+            const float ms = frame_history.At(i);
+            const ImVec2 cur(x0 + step * float(i), y_of(ms));
+            // spikes above 1.5x the budget stand out
+            const ImVec4 color = ms > target_ms * 1.5f ? TierColor(Ps4PerfStats::Tier::Bad) : kGpuAccent;
+            draw->AddLine(prev, cur, ImGui::GetColorU32(color), std::max(1.0f, ImGui::GetFontSize() * 0.09f));
+            prev = cur;
+        }
+    }
+    ImGui::Dummy(ImVec2(width, h));
+}
+
+// "GPU  Radeon RX 9070 XT ...... 45%  47°C" then the load meter across the card.
+void HardwareRow(const char* tag, const ImVec4& accent, const std::string& name, float percent,
+                 float temp_c, float width) {
+    const bool has_load = percent >= 0.0f;
+    if (name.empty() && !has_load && temp_c < 0.0f) {
         return;
     }
+    const float em = ImGui::GetFontSize();
+    const float x = ImGui::GetCursorPosX();
+    // Line 1: tag and the whole model name (cut only if it is wider than the card).
+    ImGui::TextColored(accent, "%s", tag);
+    ImGui::SameLine(x + em * 2.6f);
+    std::string label = name;
+    const float name_room = width - em * 2.6f;
+    while (label.size() > 3 && ImGui::CalcTextSize(label.c_str()).x > name_room) {
+        label.erase(label.size() - 4);
+        label += "...";
+    }
+    ImGui::TextColored(kDim, "%s", label.c_str());
+    // Line 2: load meter, then load and temperature in fixed columns at the right edge, so
+    // the GPU and CPU numbers line up.
+    char load[16] = "", temp[16] = "";
+    if (has_load) std::snprintf(load, sizeof(load), "%.0f%%", percent);
+    if (temp_c >= 0.0f) std::snprintf(temp, sizeof(temp), "%.0f\xC2\xB0" "C", temp_c);
+    const float temp_col = ImGui::CalcTextSize("100\xC2\xB0" "C").x;
+    const float load_col = ImGui::CalcTextSize("100%").x;
+    const float gap = em * 0.6f;
+    const float numbers_w = temp_col + load_col + gap;
+    const float line_h = ImGui::GetTextLineHeight();
+    const ImVec2 start = ImGui::GetCursorScreenPos();
+    if (has_load) {
+        const float bar_w = width - numbers_w - gap;
+        const float h = std::max(3.0f, em * 0.28f);
+        const float y = start.y + (line_h - h) * 0.5f;
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        draw->AddRectFilled(ImVec2(start.x, y), ImVec2(start.x + bar_w, y + h), ImGui::GetColorU32(kTrack),
+                            h * 0.5f);
+        const float f = std::clamp(percent / 100.0f, 0.0f, 1.0f);
+        if (f > 0.0f) {
+            draw->AddRectFilled(ImVec2(start.x, y), ImVec2(start.x + std::max(bar_w * f, h), y + h),
+                                ImGui::GetColorU32(accent), h * 0.5f);
+        }
+    }
+    ImGui::Dummy(ImVec2(1.0f, line_h));
+    if (load[0]) {
+        ImGui::SameLine(x + width - temp_col - gap - ImGui::CalcTextSize(load).x);
+        ImGui::TextUnformatted(load);
+    }
+    if (temp[0]) {
+        ImGui::SameLine(x + width - ImGui::CalcTextSize(temp).x);
+        ImGui::TextColored(TierColor(Ps4PerfStats::TempTier(temp_c)), "%s", temp);
+    }
+}
+
+void MemoryRow(const char* tag, double used, double total, float width) {
+    if (used < 0.0) {
+        return;
+    }
+    const float x = ImGui::GetCursorPosX();
+    ImGui::TextColored(kMemAccent, "%s", tag);
+    char value[48];
+    if (total > 0.0) std::snprintf(value, sizeof(value), "%.1f / %.0f GB", used, total);
+    else std::snprintf(value, sizeof(value), "%.1f GB", used);
+    ImGui::SameLine(x + width - ImGui::CalcTextSize(value).x);
+    ImGui::TextColored(kDim, "%s", value);
+    if (total > 0.0) Meter(float(used / total), width, kMemAccent);
+}
+
+void Divider(float width) {
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float y = p.y + ImGui::GetFontSize() * 0.25f;
+    ImGui::GetWindowDrawList()->AddLine(ImVec2(p.x, y), ImVec2(p.x + width, y),
+                                        ImGui::GetColorU32(ImVec4(1, 1, 1, 0.08f)), 1.0f);
+    ImGui::Dummy(ImVec2(width, ImGui::GetFontSize() * 0.5f));
+}
+
+void FpsCounter() {
+    namespace P = Ps4PerfStats;
+    const auto& s = Ps4Settings::Get();
+    const unsigned items = s.overlay_items;
+    if (!items) {
+        return;
+    }
+    // The sampler also feeds temperatures, so it runs whenever the card is shown.
+    if (overlay_instance) {
+        P::Start(*overlay_instance, items);
+    }
+    P::Sample sample = P::Latest();
+    {
+        std::scoped_lock lock{presentation_mutex};
+        const auto timing = presentation_counter.Latest();
+        sample.fps = timing.fps;
+        sample.frame_ms = timing.interval_ms;
+    }
+    const float dt_ms = ImGui::GetIO().DeltaTime * 1000.0f;
+    if (dt_ms > 0.0f && dt_ms < 1000.0f) frame_history.Push(dt_ms);
+
+    // The rate the game aims for: its own frame interval (2 = 30 FPS, 1 = 60 FPS) caps it below
+    // the presentation limit, so a 30 FPS session is not shown in red against a 60 FPS limit.
+    float target_fps = s.fps_limit > 0 ? float(s.fps_limit.load()) : 60.0f;
+    if (volatile uint32_t* interval = Ps4GuestImage::IntervalGlobal(); interval && *interval > 0) {
+        target_fps = std::min(target_fps, 60.0f / float(*interval));
+    }
+    // The game's own frame rate (guest flips); host presents when the game has not flipped yet.
+    const float fps = sample.game_fps >= 0.0f ? sample.game_fps : sample.fps;
+    const float frame_ms = sample.game_frame_ms >= 0.0f ? sample.game_frame_ms : sample.frame_ms;
+
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const float pad = 12.0f * base_scale;
     const int corner = s.overlay_corner;
@@ -413,17 +591,132 @@ void FpsCounter() {
     ImGui::SetNextWindowPos(ImVec2(right ? viewport->WorkPos.x + viewport->WorkSize.x - pad : viewport->WorkPos.x + pad,
                                    bottom ? viewport->WorkPos.y + viewport->WorkSize.y - pad : viewport->WorkPos.y + pad),
                             ImGuiCond_Always, ImVec2(right ? 1.0f : 0.0f, bottom ? 1.0f : 0.0f));
-    ImGui::SetNextWindowBgAlpha(s.overlay_opacity / 100.0f);
+    ImGui::SetNextWindowBgAlpha(std::max(s.overlay_opacity / 100.0f, 0.25f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.045f, 0.05f, 0.065f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(1.0f, 1.0f, 1.0f, 0.09f));
+    ImGui::PushStyleColor(ImGuiCol_Text, kText);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f * base_scale);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f * base_scale, 9.0f * base_scale));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6.0f * base_scale, 3.0f * base_scale));
     ImGui::Begin("##fps", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
                      ImGuiWindowFlags_NoFocusOnAppearing);
-    ImGui::SetWindowFontScale(s.overlay_scale / 100.0f);
-    ImGui::TextUnformatted("The Order: 1886");
-    ImGui::TextDisabled("Guest flips / host presents | F9 to hide");
-    ImGui::Separator();
-    ImGui::TextUnformatted(text.c_str());
+    const float scale = s.overlay_scale / 100.0f;
+    ImGui::SetWindowFontScale(scale);
+    const float em = ImGui::GetFontSize();
+    const bool row = s.overlay_layout == 0;
+    const ImVec4 fps_color = fps >= 0.0f ? TierColor(P::FpsTier(fps, target_fps)) : kDim;
+
+    if (row) {
+        // One compact line: 60 FPS 16.7 ms | GPU 45% 47°C | CPU 12% 45°C | VRAM 5.1 GB
+        const auto sep = [&] {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1, 1, 1, 0.20f), "|");
+            ImGui::SameLine();
+        };
+        if (items & P::Fps) {
+            if (fps >= 0.0f) ImGui::TextColored(fps_color, "%.0f", fps);
+            else ImGui::TextColored(kDim, "--");
+            ImGui::SameLine();
+            ImGui::TextColored(kDim, "FPS");
+        }
+        if ((items & P::FrameTime) && frame_ms >= 0.0f) {
+            if (items & P::Fps) ImGui::SameLine();
+            ImGui::TextColored(kDim, "%.1f ms", frame_ms);
+        }
+        const auto hw = [&](const char* tag, const ImVec4& accent, float pct, float temp) {
+            if (pct < 0.0f && temp < 0.0f) return;
+            sep();
+            ImGui::TextColored(accent, "%s", tag);
+            if (pct >= 0.0f) {
+                ImGui::SameLine();
+                ImGui::Text("%.0f%%", pct);
+            }
+            if (temp >= 0.0f) {
+                ImGui::SameLine();
+                ImGui::TextColored(TierColor(P::TempTier(temp)), "%.0f\xC2\xB0", temp);
+            }
+        };
+        hw("GPU", kGpuAccent, sample.gpu_percent, sample.gpu_temp_c);
+        hw("CPU", kCpuAccent, sample.system_cpu_percent, sample.cpu_temp_c);
+        if ((items & P::Vram) && sample.vram_used_gb >= 0.0) {
+            sep();
+            ImGui::TextColored(kMemAccent, "VRAM");
+            ImGui::SameLine();
+            ImGui::Text("%.1f GB", sample.vram_used_gb);
+        }
+        if ((items & P::Ram) && sample.system_ram_used_gb >= 0.0) {
+            sep();
+            ImGui::TextColored(kMemAccent, "RAM");
+            ImGui::SameLine();
+            ImGui::Text("%.1f GB", sample.system_ram_used_gb);
+        }
+    } else {
+        const float width = em * 15.0f;
+        // Header: big frame rate, unit and frame time beside it.
+        if (items & (P::Fps | P::FrameTime)) {
+            const float x = ImGui::GetCursorPosX();
+            if (items & P::Fps) {
+                ImGui::SetWindowFontScale(scale * 2.1f);
+                if (fps >= 0.0f) ImGui::TextColored(fps_color, "%.0f", fps);
+                else ImGui::TextColored(kDim, "--");
+                const float big_w = ImGui::GetItemRectSize().x;
+                const float big_h = ImGui::GetItemRectSize().y;
+                ImGui::SetWindowFontScale(scale);
+                ImGui::SameLine(x + big_w + em * 0.35f);
+                const float y = ImGui::GetCursorPosY();
+                ImGui::SetCursorPosY(y + big_h - em * 1.25f);
+                ImGui::TextColored(kDim, "FPS");
+            }
+            char info[64] = "";
+            if ((items & P::FrameTime) && frame_ms >= 0.0f) {
+                std::snprintf(info, sizeof(info), "%.1f ms", frame_ms);
+            }
+            if (info[0]) {
+                ImGui::SameLine(x + width - ImGui::CalcTextSize(info).x);
+                ImGui::TextColored(kDim, "%s", info);
+            }
+            if ((items & P::Fps) && sample.fps >= 0.0f && sample.game_fps >= 0.0f &&
+                std::abs(sample.fps - sample.game_fps) > 1.5f) {
+                // frame generation / presentation rate above the game's own
+                ImGui::TextColored(kDim, "Presented %.0f FPS", sample.fps);
+            }
+            if (items & P::FrameTime) {
+                FrameGraph(width, 1000.0f / target_fps);
+            }
+        }
+        // GPU and CPU always appear with whatever this PC can report (load, temperature).
+        const bool gpu_any = sample.gpu_temp_c >= 0.0f || sample.gpu_percent >= 0.0f;
+        const bool cpu_any = sample.cpu_temp_c >= 0.0f || sample.system_cpu_percent >= 0.0f;
+        if (gpu_any || cpu_any) {
+            Divider(width);
+            if (gpu_any) {
+                HardwareRow("GPU", kGpuAccent, P::ShortGpuName(sample.gpu_name), sample.gpu_percent,
+                            sample.gpu_temp_c, width);
+            }
+            if (cpu_any) {
+                HardwareRow("CPU", kCpuAccent, sample.cpu_name, sample.system_cpu_percent,
+                            sample.cpu_temp_c, width);
+            }
+        }
+        const bool vram = (items & P::Vram) && sample.vram_used_gb >= 0.0;
+        const bool ram = (items & P::Ram) && sample.system_ram_used_gb >= 0.0;
+        if (vram || ram) {
+            Divider(width);
+            if (vram) MemoryRow("VRAM", sample.vram_used_gb, sample.vram_total_gb, width);
+            if (ram) MemoryRow("RAM", sample.system_ram_used_gb, sample.ram_total_gb, width);
+        }
+        if (items & P::Upscaler) {
+            const std::string upscaler = UpscalerLabel(s.upscaler);
+            Divider(width);
+            ImGui::TextColored(kDim, "%s", upscaler.empty() ? "Native" : upscaler.c_str());
+        }
+    }
     ImGui::End();
+    ImGui::PopStyleVar(4);
+    ImGui::PopStyleColor(3);
 }
 
 void BackgroundLoading() {
@@ -518,7 +811,7 @@ const int OutputChoices[] = {Ps4Settings::OutputAutomatic, 0, 1, 2, 3};
 // One frame-rate row. 30 and 60 are the engine's own intervals (2 and 1); every higher rate runs
 // the engine uncapped (interval 0) and lets the presentation cap pace it, so no executable code
 // is changed live. Unlocked removes the cap: V-Sync or the GPU sets the limit.
-constexpr int Rates[] = {30, 60, 90, 120, 144, 165, 240, 0};
+constexpr int Rates[] = {30, 60, 90, 120, 144, 165, 0};
 constexpr int RateCount = int(sizeof(Rates) / sizeof(Rates[0]));
 
 void SetGameFrameRate(int index) {
@@ -529,6 +822,87 @@ void SetGameFrameRate(int index) {
         *global = interval;
     }
     Ps4Settings::Get().fps_limit = rate;
+}
+
+// ---- Quality (shadows, textures, anisotropy, presets) ---------------------------------------
+constexpr int QualityAnisotropies[] = {0, 1, 2, 4, 8, 16};
+constexpr int QualityAnisotropyCount = int(sizeof(QualityAnisotropies) / sizeof(QualityAnisotropies[0]));
+
+int RateIndex(int fps) {
+    for (int i = 0; i < RateCount; ++i) {
+        if (Rates[i] == fps) return i;
+    }
+    return 0;
+}
+
+// A single choice made by hand turns the preset into Custom.
+void MarkCustom() {
+    Ps4Settings::Get().quality_preset = Ps4Settings::QualityCustom;
+}
+
+void ApplyQualityPreset(int index) {
+    auto& s = Ps4Settings::Get();
+    s.quality_preset = index;
+    Ps4Settings::QualityRecipe recipe{};
+    if (!Ps4Settings::PresetRecipe(index, recipe)) {
+        Ps4Settings::SaveQuality();
+        return;
+    }
+    s.shadows = recipe.shadows;
+    s.texture_quality = recipe.texture_quality;
+    s.quality_anisotropy = recipe.anisotropy;
+    s.quality_generation.fetch_add(1);
+    if (Ps4GuestImage::IntervalGlobal()) {
+        SetGameFrameRate(RateIndex(recipe.frame_rate));
+    }
+    Ps4Settings::SaveQuality();
+    // The launcher prepares the game with these at the next Play (the render resolution is
+    // part of the prepared image and cannot change while the game runs).
+    const bool stored = Ps4Settings::StoreForNextLaunch(recipe.render_width, recipe.frame_rate,
+                                                        recipe.anisotropy);
+    std::string text = std::string(Ps4Settings::QualityPresetName(index)) +
+                       " preset applied. Restart the game to apply all preset changes.";
+    if (recipe.render_width > 0 && !stored) {
+        text += " Set the render resolution to " + std::to_string(recipe.render_width) +
+                " in the launcher.";
+    }
+    ShowNotice(text, 8000);
+}
+
+// Choosing a preset in the row opens a confirmation dialog (Apply / Cancel) instead of
+// applying it at once; -1 while no dialog is open.
+int pending_preset = -1;
+int dialog_focus = 0; // 0 Apply, 1 Cancel
+
+void OpenPresetDialog(int index) {
+    if (index == Ps4Settings::QualityCustom) {
+        ApplyQualityPreset(index); // Custom changes nothing: no dialog
+        return;
+    }
+    pending_preset = index;
+    dialog_focus = 0;
+}
+
+void ApplyShadows(int index) {
+    Ps4Settings::Get().shadows = index == 1;
+    MarkCustom();
+    Ps4Settings::SaveQuality();
+}
+
+void ApplyTextureQuality(int index) {
+    auto& s = Ps4Settings::Get();
+    s.texture_quality = index;
+    s.quality_generation.fetch_add(1);
+    MarkCustom();
+    Ps4Settings::SaveQuality();
+}
+
+void ApplyQualityAnisotropy(int index) {
+    auto& s = Ps4Settings::Get();
+    s.quality_anisotropy = QualityAnisotropies[std::clamp(index, 0, QualityAnisotropyCount - 1)];
+    s.quality_generation.fetch_add(1);
+    MarkCustom();
+    Ps4Settings::SaveQuality();
 }
 
 std::vector<Row> BuildRows() {
@@ -591,10 +965,63 @@ std::vector<Row> BuildRows() {
                     "The size the finished picture is scaled to before it is fitted to the window. "
                     "Automatic follows the window. The game still renders its scene at its own size.",
                     size_note, [](int index) { Ps4Settings::Get().output_res = OutputChoices[index]; }});
+    const bool ultrawide_ok = s.ultrawide_available.load();
+    rows.push_back({nullptr, "Ultrawide (21:9)", Kind::Toggle, {"Off", "Fill screen"},
+                    s.ultrawide && ultrawide_ok ? 1 : 0, ultrawide_ok, "Ultrawide (21:9)",
+                    "The game's picture is 2.4:1, the shape of a 21:9 monitor; normally it sits inside a "
+                    "16:9 frame with black bars above and below, and a 21:9 screen then adds bars at the "
+                    "sides too. Fill screen shows only the picture, scaled to the width of the window: "
+                    "no bars on 21:9 displays. Menus, subtitles and prompts stay inside the picture. "
+                    "Changes right away.",
+                    ultrawide_ok ? std::string()
+                                 : std::string("Not available: choose Original framing in the launcher. "
+                                               "With 16:9 framing there are no bars to remove."),
+                    [](int index) {
+                        Ps4Settings::Get().ultrawide = index == 1;
+                        Ps4Settings::SaveQuality();
+                    }});
     rows.push_back({"Overlay", "FPS counter", Kind::Toggle, {"Off", "On"}, s.show_fps ? 1 : 0, true,
                     "FPS counter", "The frame rate and frame time in a corner of the screen. F9 also "
                     "shows or hides it.",
                     "", [](int index) { Ps4Settings::Get().show_fps = index == 1; }});
+
+    // Quality: everything here changes right away except the render resolution of the Steam
+    // Deck preset, which the launcher applies at the next start.
+    const int preset = std::clamp(s.quality_preset.load(), 0, int(Ps4Settings::QualityCustom));
+    rows.push_back({"Quality", "Preset", Kind::Choice, {"Steam Deck", "Low", "Medium", "High", "Custom"},
+                    preset, true, "Quality preset",
+                    "Sets shadows, texture quality, anisotropic filtering and the frame rate together. "
+                    "Steam Deck: shadows off, low textures, 2x filtering, 30 FPS and a 1280-wide render "
+                    "resolution. Low: the same at your render resolution. Medium: shadows on, medium "
+                    "textures, 8x, 60 FPS. High: everything at full quality, 16x, 60 FPS. Changing any "
+                    "option below turns the preset into Custom.",
+                    preset != Ps4Settings::QualityCustom
+                        ? "Restart the game to apply all preset changes (render resolution and "
+                          "frame-rate profile). Shadows, textures and filtering already changed."
+                        : "",
+                    OpenPresetDialog});
+    rows.push_back({nullptr, "Shadows", Kind::Toggle, {"Off", "On"}, s.shadows ? 1 : 0, true, "Shadows",
+                    "Off skips drawing the sun, lamp and torch shadow maps: the scene is lit as if "
+                    "nothing cast a shadow. It saves GPU time and CPU time on the GPU thread, which "
+                    "helps most on handhelds and older PCs. Changes right away.",
+                    "", ApplyShadows});
+    rows.push_back({nullptr, "Textures", Kind::Choice, {"Low", "Medium", "High"},
+                    std::clamp(s.texture_quality.load(), 0, 2), true, "Texture quality",
+                    "Low and Medium read surface textures two or one detail level down: softer "
+                    "surfaces, less memory bandwidth (the Steam Deck's main limit). Menus, text and "
+                    "the game's own render targets are not affected. Changes right away.",
+                    "", ApplyTextureQuality});
+    int aniso = 0;
+    for (int i = 0; i < QualityAnisotropyCount; ++i) {
+        if (QualityAnisotropies[i] == s.quality_anisotropy) aniso = i;
+    }
+    rows.push_back({nullptr, "Anisotropic filtering", Kind::Choice,
+                    {"Launcher setting", "Off", "2x", "4x", "8x", "16x"}, aniso, true,
+                    "Anisotropic filtering",
+                    "Keeps floors and walls sharp at a glancing angle. Higher costs more memory "
+                    "bandwidth; 2x is a good balance on the Steam Deck. Launcher setting uses the "
+                    "value chosen in the launcher. Changes right away.",
+                    "", ApplyQualityAnisotropy});
     return rows;
 }
 
@@ -646,25 +1073,57 @@ void Draw() {
     const int count = int(rows.size());
     focused = std::clamp(focused, 0, count - 1);
 
+    // A dialog left open when the menu closed does not come back on the next open.
+    static int last_frame = -2;
+    if (ImGui::GetFrameCount() - last_frame > 1) {
+        pending_preset = -1;
+    }
+    last_frame = ImGui::GetFrameCount();
+
     // Keyboard and controller (forwarded to ImGui while the menu is open).
     const auto pressed = [](ImGuiKey key) { return ImGui::IsKeyPressed(key, true); };
-    if (pressed(ImGuiKey_UpArrow) || pressed(ImGuiKey_GamepadDpadUp)) {
-        focused = (focused + count - 1) % count;
+    const bool confirm = ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
+                         ImGui::IsKeyPressed(ImGuiKey_Space, false) ||
+                         ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false);
+    const bool back = ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false);
+    bool close = false;
+    // Set while the preset dialog takes the input; the buttons' mouse clicks are checked when
+    // they are drawn.
+    const bool dialog = pending_preset >= 0;
+    if (dialog) {
+        if (pressed(ImGuiKey_LeftArrow) || pressed(ImGuiKey_GamepadDpadLeft) ||
+            pressed(ImGuiKey_RightArrow) || pressed(ImGuiKey_GamepadDpadRight) ||
+            pressed(ImGuiKey_UpArrow) || pressed(ImGuiKey_GamepadDpadUp) ||
+            pressed(ImGuiKey_DownArrow) || pressed(ImGuiKey_GamepadDpadDown)) {
+            dialog_focus = 1 - dialog_focus;
+        }
+        if (confirm) {
+            if (dialog_focus == 0) {
+                ApplyQualityPreset(pending_preset);
+                dirty = true;
+            }
+            pending_preset = -1;
+        } else if (back) {
+            pending_preset = -1;
+        }
+    } else {
+        if (pressed(ImGuiKey_UpArrow) || pressed(ImGuiKey_GamepadDpadUp)) {
+            focused = (focused + count - 1) % count;
+        }
+        if (pressed(ImGuiKey_DownArrow) || pressed(ImGuiKey_GamepadDpadDown)) {
+            focused = (focused + 1) % count;
+        }
+        if (pressed(ImGuiKey_LeftArrow) || pressed(ImGuiKey_GamepadDpadLeft)) {
+            Change(rows, focused, -1);
+        }
+        if (pressed(ImGuiKey_RightArrow) || pressed(ImGuiKey_GamepadDpadRight)) {
+            Change(rows, focused, 1);
+        }
+        if (confirm) {
+            Change(rows, focused, rows[focused].kind == Kind::Toggle ? 0 : 1);
+        }
+        close = back;
     }
-    if (pressed(ImGuiKey_DownArrow) || pressed(ImGuiKey_GamepadDpadDown)) {
-        focused = (focused + 1) % count;
-    }
-    if (pressed(ImGuiKey_LeftArrow) || pressed(ImGuiKey_GamepadDpadLeft)) {
-        Change(rows, focused, -1);
-    }
-    if (pressed(ImGuiKey_RightArrow) || pressed(ImGuiKey_GamepadDpadRight)) {
-        Change(rows, focused, 1);
-    }
-    if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_Space, false) ||
-        ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false)) {
-        Change(rows, focused, rows[focused].kind == Kind::Toggle ? 0 : 1);
-    }
-    bool close = ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false);
 
     const ImGuiIO& io = ImGui::GetIO();
     const float W = io.DisplaySize.x, H = io.DisplaySize.y;
@@ -717,7 +1176,7 @@ void Draw() {
         const bool focus = i == focused;
         const ImVec2 a(left, y), m(left + label_w, y + row_h), b(left + list_w, y + row_h);
         // Mouse: hovering focuses a row, a click on the value changes it (left half back).
-        if (mouse.x >= a.x && mouse.x < b.x && mouse.y >= a.y && mouse.y < b.y) {
+        if (!dialog && mouse.x >= a.x && mouse.x < b.x && mouse.y >= a.y && mouse.y < b.y) {
             if (ImGui::IsMouseClicked(0)) {
                 focused = i;
                 if (mouse.x >= m.x) {
@@ -807,6 +1266,73 @@ void Draw() {
         KeyCap(dl, s, hp, h.keys[0]);
         KeyCap(dl, s, hp, h.keys[1]);
         hp.x += 30.0f * s;
+    }
+
+    // Preset confirmation dialog: what the preset changes, then Apply / Cancel.
+    Ps4Settings::QualityRecipe recipe{};
+    if (pending_preset >= 0 && Ps4Settings::PresetRecipe(pending_preset, recipe)) {
+        dl->AddRectFilled(p0, p1, IM_COL32(0, 0, 0, 160), 6.0f * s);
+        const float dw = std::min(820.0f * s, W - 2 * margin - 40.0f * s);
+        const float dh = 560.0f * s;
+        const ImVec2 a((W - dw) * 0.5f, (H - dh) * 0.5f), b(a.x + dw, a.y + dh);
+        dl->AddRectFilled(a, b, Panel, 8.0f * s);
+        dl->AddRect(a, b, Accent, 8.0f * s, 0, 2.0f * s);
+        const float pad = 34.0f * s;
+        float dy = a.y + pad;
+        const std::string title =
+            std::string("Apply the ") + Ps4Settings::QualityPresetName(pending_preset) + " preset?";
+        Text(dl, 34.0f * s, ImVec2(a.x + pad, dy), Focus, title.c_str());
+        dy += 62.0f * s;
+        std::string aniso_text = recipe.anisotropy <= 1 ? std::string("Off")
+                                                        : std::to_string(recipe.anisotropy) + "x";
+        static const char* const texture_names[] = {"Low", "Medium", "High"};
+        const std::string width_text = recipe.render_width > 0
+                                           ? std::to_string(recipe.render_width) + " wide (after restart)"
+                                           : std::string("Unchanged");
+        const std::pair<const char*, std::string> lines[] = {
+            {"Shadows", recipe.shadows ? "On" : "Off"},
+            {"Textures", texture_names[std::clamp(recipe.texture_quality, 0, 2)]},
+            {"Anisotropic filtering", aniso_text},
+            {"Frame rate", std::to_string(recipe.frame_rate) + " FPS"},
+            {"Render resolution", width_text},
+        };
+        for (const auto& [label, value] : lines) {
+            Text(dl, 26.0f * s, ImVec2(a.x + pad, dy), Muted, label);
+            Text(dl, 26.0f * s, ImVec2(a.x + dw * 0.5f, dy), Ink, value.c_str());
+            dy += 40.0f * s;
+        }
+        dy += 14.0f * s;
+        const char* note = "Shadows, textures, filtering and the frame rate change right away. "
+                           "Restart the game to apply all preset changes.";
+        dl->AddRectFilled(ImVec2(a.x + pad, dy), ImVec2(a.x + pad + 4.0f * s, dy + 64.0f * s), Accent);
+        Text(dl, 24.0f * s, ImVec2(a.x + pad + 20.0f * s, dy), Ink, note, dw - pad * 2 - 20.0f * s);
+        // Buttons: arrows move between them, Enter or the south button presses, east cancels.
+        const float bw = 220.0f * s, bh = 64.0f * s, by = b.y - pad - bh;
+        const ImVec2 apply_a(b.x - pad - bw * 2 - 20.0f * s, by), apply_b(apply_a.x + bw, by + bh);
+        const ImVec2 cancel_a(b.x - pad - bw, by), cancel_b(cancel_a.x + bw, by + bh);
+        const auto inside = [&](ImVec2 p, ImVec2 q) {
+            return mouse.x >= p.x && mouse.x < q.x && mouse.y >= p.y && mouse.y < q.y;
+        };
+        if (inside(apply_a, apply_b)) dialog_focus = 0;
+        if (inside(cancel_a, cancel_b)) dialog_focus = 1;
+        const auto button = [&](ImVec2 p, ImVec2 q, const char* label, bool focus) {
+            dl->AddRectFilled(p, q, focus ? Accent : Surface2, 4.0f * s);
+            if (focus) {
+                dl->AddRect(ImVec2(p.x - 2, p.y - 2), ImVec2(q.x + 2, q.y + 2), Ink, 5.0f * s, 0, 2.0f * s);
+            }
+            TextCentered(dl, 28.0f * s, p, q, focus ? AccentInk : Ink, label);
+        };
+        button(apply_a, apply_b, "Apply", dialog_focus == 0);
+        button(cancel_a, cancel_b, "Cancel", dialog_focus == 1);
+        if (ImGui::IsMouseClicked(0)) {
+            if (inside(apply_a, apply_b)) {
+                ApplyQualityPreset(pending_preset);
+                dirty = true;
+                pending_preset = -1;
+            } else if (inside(cancel_a, cancel_b)) {
+                pending_preset = -1;
+            }
+        }
     }
     ImGui::End();
     if (close) {

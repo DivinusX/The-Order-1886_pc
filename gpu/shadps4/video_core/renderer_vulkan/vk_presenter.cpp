@@ -130,6 +130,31 @@ static vk::Rect2D FitImage(s32 frame_width, s32 frame_height, s32 swapchain_widt
                          dst_rect.offset.x, dst_rect.offset.y);
 }
 
+// Ultrawide (Ps4Settings::ultrawide): the game draws a 2.4:1 picture band, centred in a 16:9
+// frame (Original framing; the UI patch keeps menus, subtitles and prompts inside the band).
+// Showing only that band fills a 21:9 display instead of boxing a 16:9 frame inside it.
+constexpr float UltrawideBandRatio = 12.0f / 5.0f;
+
+static bool UltrawideActive(float frame_ratio) {
+    const auto& s = Ps4Settings::Get();
+    // Only frames taller than the band have bars to crop (16:9; not an odd window shape).
+    return s.ultrawide.load(std::memory_order_relaxed) &&
+           s.ultrawide_available.load(std::memory_order_relaxed) &&
+           frame_ratio < UltrawideBandRatio * 0.95f;
+}
+
+[[nodiscard]] static vk::ImageBlit MakeImageBlitBand(s32 frame_width, s32 frame_height, s32 swapchain_width,
+                                              s32 swapchain_height) {
+    const s32 band_height = std::min<s32>(frame_height, static_cast<s32>(frame_width / UltrawideBandRatio));
+    const s32 band_top = (frame_height - band_height) / 2;
+    const auto dst = FitImage(frame_width, band_height, swapchain_width, swapchain_height);
+    auto blit = MakeImageBlit(frame_width, frame_height, dst.extent.width, dst.extent.height,
+                              dst.offset.x, dst.offset.y);
+    blit.srcOffsets[0].y = band_top;
+    blit.srcOffsets[1].y = band_top + band_height;
+    return blit;
+}
+
 // F12 screenshots of the game's frame (without the overlay), saved as PNG to the user
 // folder's screenshots/ once the GPU is done; the conversion follows upstream shadPS4.
 namespace {
@@ -942,9 +967,11 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         };
         cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer,
                                vk::DependencyFlagBits::eByRegion, clear_done, {}, {});
+        const bool band = UltrawideActive(float(frame->width) / float(std::max(frame->height, 1u)));
         cmdbuf.blitImage(frame->image, vk::ImageLayout::eTransferSrcOptimal, swapchain_image,
                          vk::ImageLayout::eTransferDstOptimal,
-                         MakeImageBlitFit(frame->width, frame->height, extent.width, extent.height),
+                         band ? MakeImageBlitBand(frame->width, frame->height, extent.width, extent.height)
+                              : MakeImageBlitFit(frame->width, frame->height, extent.width, extent.height),
                          vk::Filter::eLinear);
         if (VideoCore::ConsumeGameOnlyScreenshotRequests() != 0) {
             CaptureScreenshot(instance, scheduler, cmdbuf, *frame);
@@ -1078,6 +1105,14 @@ void Presenter::SetExpectedGameSize(s32 width, s32 height) {
     }
     const float ratio = (float)width / (float)height;
 
+    if (UltrawideActive(expected_ratio)) {
+        // Only the 2.4:1 band is shown: size the frame so the band (not the whole 16:9 frame)
+        // fills the window, 1:1 on a 21:9 display (3440 wide -> 3440x1433 band).
+        const s32 band_width = std::min<s32>(width, static_cast<s32>(height * UltrawideBandRatio));
+        expected_frame_width = std::max<s32>(band_width & ~1, 2);
+        expected_frame_height = std::max<s32>(static_cast<s32>(expected_frame_width / expected_ratio) & ~1, 2);
+        return;
+    }
     expected_frame_height = height;
     expected_frame_width = width;
     if (ratio > expected_ratio) {

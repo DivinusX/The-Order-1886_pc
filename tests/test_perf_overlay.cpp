@@ -11,6 +11,12 @@
 
 namespace P = Ps4PerfStats;
 
+#ifndef _WIN32
+static int _putenv_s(const char* name, const char* value) {
+    return setenv(name, value, 1);
+}
+#endif
+
 static std::string Read(const char* path) {
     std::ifstream in(path);
     std::stringstream s;
@@ -157,5 +163,35 @@ int main() {
     Ps4Settings::Load();
     assert(!v.fsr1);
     std::remove(path);
+    // Hardware panel helpers (Linux /proc parsing, names, colour bands, sensor choice).
+    P::CpuTimes a, b;
+    assert(P::ParseCpuLine("cpu  100 0 50 800 50 0 0 0 0 0", a));
+    assert(a.total == 1000 && a.idle == 850);
+    assert(P::ParseCpuLine("cpu  200 0 100 1550 100 0 0 0 7 7", b)); // guest not added twice
+    assert(b.total == 1950 && b.idle == 1650);
+    assert(std::abs(P::CpuBusyPercent(a, b) - 100.0f * 150.0f / 950.0f) < 0.01f);
+    assert(P::CpuBusyPercent(b, a) < 0.0f);
+    assert(!P::ParseCpuLine("cpu0 1 2 3 4", a) && !P::ParseCpuLine("intr 5", a));
+    double total = 0, avail = 0;
+    assert(P::ParseMeminfo("MemTotal:       32768000 kB\nMemFree:  100 kB\nMemAvailable:   16384000 kB\n",
+                           total, avail));
+    assert(std::abs(total - 31.25) < 0.001 && std::abs(avail - 15.625) < 0.001);
+    assert(!P::ParseMeminfo("MemTotal: 10 kB\n", total, avail));
+    assert(P::ShortCpuName(" AMD Ryzen 9 9900X 12-Core Processor") == "Ryzen 9 9900X");
+    assert(P::ShortCpuName("Intel(R) Core(TM) i7-12700K CPU @ 3.60GHz") == "Core i7-12700K");
+    assert(P::ShortCpuName("AMD Ryzen 7 7840HS w/ Radeon 780M Graphics") == "Ryzen 7 7840HS");
+    assert(P::ShortCpuName("13th Gen Intel(R) Core(TM) i5-13600K") == "13th Gen Core i5-13600K");
+    assert(P::ShortGpuName("AMD Radeon RX 9070 XT (RADV GFX1201)") == "Radeon RX 9070 XT");
+    assert(P::ShortGpuName("NVIDIA GeForce RTX 4070") == "RTX 4070");
+    assert(P::ShortGpuName("Intel(R) Arc(TM) A770 Graphics") == "Arc A770 Graphics");
+    assert(P::TempTier(55.0f) == P::Tier::Good && P::TempTier(75.0f) == P::Tier::Warn &&
+           P::TempTier(90.0f) == P::Tier::Bad);
+    assert(P::FpsTier(59.5f, 60.0f) == P::Tier::Good && P::FpsTier(50.0f, 60.0f) == P::Tier::Warn &&
+           P::FpsTier(30.0f, 60.0f) == P::Tier::Bad && P::FpsTier(30.0f, 30.0f) == P::Tier::Good);
+    assert(std::string(P::PreferredTempLabels("k10temp")[0]) == "Tdie");
+    assert(std::string(P::PreferredTempLabels("coretemp")[0]) == "Package id 0");
+    assert(std::string(P::PreferredTempLabels("amdgpu")[0]) == "edge");
+    assert(P::PreferredTempLabels("nvme")[0] == nullptr);
+
     std::puts("PASS: performance overlay");
 }

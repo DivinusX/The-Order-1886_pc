@@ -673,14 +673,6 @@ void VideoOutDriver::SubmitFlipInternal(VideoOutPort* port, s32 index, s64 flip_
 }
 
 void VideoOutDriver::PresentThread(std::stop_token token) {
-    const std::chrono::nanoseconds vblank_period(1000000000 /
-                                                 EmulatorSettings.GetVblankFrequency());
-
-    Common::SetCurrentThreadName("shadPS4:PresentThread");
-    Common::SetCurrentThreadRealtime(vblank_period);
-
-    Common::AccurateTimer timer{vblank_period};
-
     // frame limit (see EmulatorSettings::GetFrameLimit). A request waits in the queue
     // until its slot; slots advance by one period (no drift) but never lag behind by more.
     // With the in-game menu enabled, the limit it edits is live (Ps4Settings::fps_limit);
@@ -689,16 +681,35 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
         if (Ps4Settings::MenuEnabled()) {
             const int live = Ps4Settings::Get().fps_limit.load();
             // ParseFpsLimit already bounds the file value; clamp here for the menu's own edits.
-            return live > 0 ? u32(std::min(live, 240)) : u32(0);
+            // The menu's Unlocked (0) is capped like the launcher's uncapped presets: the
+            // display refresh, at most 120 (above that the game's movement timing breaks).
+            return live > 0 ? u32(std::min(live, 240)) : std::min<u32>(Ps4DisplayRefreshHz(), 120);
         }
         return EmulatorSettings.GetFrameLimit();
     };
+    // A rate above a 30/60 launch's 60 Hz vblank (the menu's Unlocked or 90-240 FPS) needs the
+    // fast vblank the launcher's uncapped presets start with; otherwise every flip waits for the
+    // next 60 Hz vblank and the game never runs faster than 60.
+    const u32 launch_vblank_hz = EmulatorSettings.GetVblankFrequency();
+    const auto vblank_period_for = [launch_vblank_hz](u32 limit) {
+        const u32 hz = Ps4Settings::MenuEnabled() && launch_vblank_hz <= 60 && limit > 60
+                           ? 480u
+                           : launch_vblank_hz;
+        return std::chrono::nanoseconds(1000000000 / hz);
+    };
     u32 frame_limit = current_limit();
+    std::chrono::nanoseconds vblank_period = vblank_period_for(frame_limit);
+
+    Common::SetCurrentThreadName("shadPS4:PresentThread");
+    Common::SetCurrentThreadRealtime(vblank_period);
+
+    Common::AccurateTimer timer{vblank_period};
+
     auto frame_period = frame_limit ? std::chrono::nanoseconds(1000000000 / frame_limit)
                                     : std::chrono::nanoseconds(0);
     auto next_flip = std::chrono::steady_clock::now();
     std::printf("VideoOut: vblank %u Hz, frame limit %u FPS\n",
-                EmulatorSettings.GetVblankFrequency(), frame_limit);
+                u32(1000000000 / vblank_period.count()), frame_limit);
 
     const auto receive_request = [this] -> Request {
         std::scoped_lock lk{mutex};
@@ -720,7 +731,12 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
             frame_period = limit ? std::chrono::nanoseconds(1000000000 / limit) : std::chrono::nanoseconds(0);
             immediate_flips = limit != 0;
             next_flip = std::chrono::steady_clock::now();
-            std::printf("VideoOut: frame limit %u FPS\n", limit);
+            if (const auto period = vblank_period_for(limit); period != vblank_period) {
+                vblank_period = period;
+                timer = Common::AccurateTimer{vblank_period};
+            }
+            std::printf("VideoOut: frame limit %u FPS, vblank %u Hz\n", limit,
+                        u32(1000000000 / vblank_period.count()));
         }
         timer.Start();
         const auto tick_deadline = std::chrono::steady_clock::now() + vblank_period;

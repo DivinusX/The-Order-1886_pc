@@ -30,6 +30,9 @@ inline constexpr int OutputCount = 4;
 inline constexpr int OutputAutomatic = -1;
 inline constexpr int OutputDefault = OutputAutomatic;
 
+/// Quality presets of the menu, in menu order.
+enum QualityPreset : int { QualityDeck, QualityLow, QualityMedium, QualityHigh, QualityCustom };
+
 struct Values {
     std::atomic<int> upscaler{UpscalerOff};
     /// The upscaler runtime.ini or ORDER1886_UPSCALER asked for, before Load forces it off.
@@ -112,7 +115,36 @@ struct Values {
     bool startup_object_motion = false;
     int startup_output_res = OutputDefault;
     int startup_live_resolution = 0;
+
+    // Quality (the menu's "Quality" section): live, saved in graphics.ini next to runtime.ini
+    // (the launcher rewrites runtime.ini from its own settings on every Play).
+    /// Off: draws into shadow maps (depth-only, square power-of-two targets) are skipped, the
+    /// maps keep their clear, and everything is lit as if unshadowed.
+    std::atomic<bool> shadows{true};
+    /// 0 low, 1 medium, 2 high: mipmapped textures start that many mip levels down.
+    std::atomic<int> texture_quality{2};
+    /// 0: the launcher's anisotropy (startup_anisotropy); otherwise the menu's 1-16.
+    std::atomic<int> quality_anisotropy{0};
+    std::atomic<int> quality_preset{QualityCustom};
+    /// Bumped when a sampler-affecting choice changes, so the sampler cache makes new ones.
+    std::atomic<unsigned> quality_generation{0};
+    /// Ultrawide (21:9): present only the game's 2.4:1 picture band, scaled to fill the window
+    /// width, instead of the whole 16:9 frame with its black bars. Live; graphics.ini.
+    std::atomic<bool> ultrawide{false};
+    /// The prepared image uses Original (2.4:1) framing: the band exists (prepared.json).
+    std::atomic<bool> ultrawide_available{false};
 };
+
+struct QualityRecipe {
+    bool shadows;
+    int texture_quality;
+    int anisotropy;
+    int frame_rate;   ///< 30 or 60
+    int render_width; ///< 0: keep the launcher's render resolution
+};
+/// What a preset sets; Custom has no recipe (returns false).
+bool PresetRecipe(int preset, QualityRecipe& out);
+const char* QualityPresetName(int preset);
 
 Values& Get();
 
@@ -133,6 +165,13 @@ bool FixedRenderSession();
 bool GraphicsNeedRestart();
 /// Writes the file (menu changes).
 void Save();
+/// graphics.ini (quality section): read by Load, written by the menu.
+void LoadQuality();
+void SaveQuality();
+/// Stores the render width, frame rate and anisotropy in the launcher's settings.json so the
+/// next Play prepares the game with them (the render resolution cannot change while it runs).
+/// Returns false when the file is missing or has no such keys.
+bool StoreForNextLaunch(int render_width, int frame_rate, int anisotropy);
 
 /// Render resolution divisor of a preset (1.0 native, 1.5 quality, ...).
 float PresetScale(int preset);

@@ -3,6 +3,7 @@
 #include "ps4_graphics.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -220,6 +221,7 @@ void Load() {
                 v.rcas ? "on" : "off", v.rcas_strength.load(), v.anisotropy.load(),
                 int(v.async_shaders.load()), v.frames_queued.load(), v.overlay_items.load(),
                 v.sun_sync.load(), int(v.htile_expand.load()));
+    LoadQuality();
 }
 
 bool GraphicsNeedRestart() {
@@ -309,6 +311,142 @@ void Save() {
         std::fprintf(file, "upscaler=%s\n", UpscalerName(v.requested_upscaler));
     }
     std::fclose(file);
+}
+
+namespace {
+// graphics.ini and the launcher's settings.json sit next to runtime.ini (the state folder).
+std::string SiblingPath(const char* name) {
+    const std::string config = Path();
+    const size_t slash = config.find_last_of("/\\");
+    return slash == std::string::npos ? std::string(name) : config.substr(0, slash + 1) + name;
+}
+} // namespace
+
+bool PresetRecipe(int preset, QualityRecipe& out) {
+    switch (preset) {
+    case QualityDeck: out = {false, 0, 2, 30, 1280}; return true;
+    case QualityLow: out = {false, 0, 2, 30, 0}; return true;
+    case QualityMedium: out = {true, 1, 8, 60, 0}; return true;
+    case QualityHigh: out = {true, 2, 16, 60, 0}; return true;
+    default: return false;
+    }
+}
+
+const char* QualityPresetName(int preset) {
+    static constexpr const char* names[] = {"Steam Deck", "Low", "Medium", "High", "Custom"};
+    return names[std::clamp(preset, 0, int(QualityCustom))];
+}
+
+void LoadQuality() {
+    auto& v = Get();
+    // Ultrawide needs the game's Original (2.4:1) framing: with 16:9 framing there is no band
+    // and cropping would cut the picture. The prepared image records which one it uses.
+    {
+        std::string prepared;
+        if (FILE* file = std::fopen(SiblingPath("prepared/prepared.json").c_str(), "rb")) {
+            char buffer[4096];
+            for (size_t n; (n = std::fread(buffer, 1, sizeof(buffer), file)) > 0;) prepared.append(buffer, n);
+            std::fclose(file);
+        }
+        v.ultrawide_available = prepared.find("\"aspect_ratio\": \"original\"") != std::string::npos &&
+                                prepared.find("\"aspect_ratio\": \"16:9\"") == std::string::npos;
+    }
+    const std::string path = SiblingPath("graphics.ini");
+    FILE* file = std::fopen(path.c_str(), "r");
+    if (!file) {
+        return; // defaults: shadows on, high textures, the launcher's anisotropy
+    }
+    char line[256];
+    while (std::fgets(line, sizeof(line), file)) {
+        std::string text(line);
+        while (!text.empty() && (text.back() == '\n' || text.back() == '\r' || text.back() == ' ')) {
+            text.pop_back();
+        }
+        const size_t eq = text.find('=');
+        if (text.empty() || text[0] == '#' || eq == std::string::npos) continue;
+        const std::string key = text.substr(0, eq);
+        const int value = std::atoi(text.c_str() + eq + 1);
+        if (key == "shadows") v.shadows = value != 0;
+        else if (key == "texture_quality") v.texture_quality = std::clamp(value, 0, 2);
+        else if (key == "anisotropy") v.quality_anisotropy = std::clamp(value, 0, 16);
+        else if (key == "preset") v.quality_preset = std::clamp(value, 0, int(QualityCustom));
+        else if (key == "ultrawide") v.ultrawide = value != 0;
+    }
+    std::fclose(file);
+    v.quality_generation.fetch_add(1);
+    std::printf("Quality: %s preset, shadows %s, textures %d, anisotropy %d, ultrawide %s (%s)\n",
+                QualityPresetName(v.quality_preset), v.shadows ? "on" : "off",
+                v.texture_quality.load(), v.quality_anisotropy.load(),
+                v.ultrawide ? (v.ultrawide_available ? "on" : "on, unavailable: 16:9 framing") : "off",
+                path.c_str());
+    std::fflush(stdout);
+}
+
+void SaveQuality() {
+    const auto& v = Get();
+    const std::string path = SiblingPath("graphics.ini");
+    FILE* file = std::fopen(path.c_str(), "w");
+    if (!file) {
+        std::printf("Quality: cannot write %s\n", path.c_str());
+        return;
+    }
+    std::fprintf(file,
+                 "# The Order: 1886 quality settings (in-game menu, F1 > Quality)\n"
+                 "preset=%d\nshadows=%d\ntexture_quality=%d\nanisotropy=%d\nultrawide=%d\n",
+                 v.quality_preset.load(), int(v.shadows.load()), v.texture_quality.load(),
+                 v.quality_anisotropy.load(), int(v.ultrawide.load()));
+    std::fclose(file);
+}
+
+bool StoreForNextLaunch(int render_width, int frame_rate, int anisotropy) {
+    const std::string path = SiblingPath("settings.json");
+    std::string text;
+    if (FILE* file = std::fopen(path.c_str(), "rb")) {
+        char buffer[4096];
+        for (size_t n; (n = std::fread(buffer, 1, sizeof(buffer), file)) > 0;) text.append(buffer, n);
+        std::fclose(file);
+    }
+    if (text.empty()) {
+        return false;
+    }
+    // Replace the number after "key": in place; the launcher owns the rest of the file.
+    const auto set = [&](const char* key, int value) {
+        const std::string quoted = std::string("\"") + key + "\"";
+        size_t at = text.find(quoted);
+        if (at == std::string::npos || value < 0) return false;
+        at = text.find(':', at + quoted.size());
+        if (at == std::string::npos) return false;
+        const size_t start = text.find_first_not_of(" \t", at + 1);
+        if (start == std::string::npos) return false;
+        size_t end = start;
+        while (end < text.size() && (std::isdigit(static_cast<unsigned char>(text[end])) || text[end] == '-')) {
+            ++end;
+        }
+        if (end == start) return false;
+        text.replace(start, end - start, std::to_string(value));
+        return true;
+    };
+    bool changed = false;
+    if (render_width > 0) changed |= set("render_width", render_width);
+    if (frame_rate > 0) changed |= set("frame_rate", frame_rate);
+    if (anisotropy >= 0) changed |= set("anisotropy", anisotropy);
+    if (!changed) {
+        return false;
+    }
+    const std::string temp = path + ".tmp";
+    FILE* out = std::fopen(temp.c_str(), "wb");
+    if (!out) return false;
+    const bool ok = std::fwrite(text.data(), 1, text.size(), out) == text.size();
+    std::fclose(out);
+    if (!ok) {
+        std::remove(temp.c_str());
+        return false;
+    }
+#ifdef _WIN32
+    // The Windows C runtime's rename() refuses an existing destination.
+    std::remove(path.c_str());
+#endif
+    return std::rename(temp.c_str(), path.c_str()) == 0;
 }
 
 float PresetScale(int preset) {

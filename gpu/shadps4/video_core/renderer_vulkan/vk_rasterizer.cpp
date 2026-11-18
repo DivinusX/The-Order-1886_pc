@@ -915,9 +915,45 @@ bool Rasterizer::FilterDrawPasses() const {
     return !(mode == Mode::Disable && (depth_copy || stencil_copy));
 }
 
+// Quality menu, Shadows Off: draws into a shadow map are skipped. A shadow-map draw writes depth
+// only (no colour target written, not a clear) into a square power-of-two depth target; the
+// scene's own depth is never square (2.4:1 or 16:9). The maps keep their clear (far plane), so
+// nothing is shadowed, and the shadow pass costs neither GPU time nor GPU-thread CPU time.
+static std::atomic<u64> shadow_draws_skipped{0};
+static bool SkipShadowCaster(const AmdGpu::Regs& regs) {
+    if (Ps4Settings::Get().shadows.load(std::memory_order_relaxed)) {
+        return false;
+    }
+    if (!regs.depth_buffer.DepthValid() || !regs.depth_control.depth_write_enable ||
+        regs.depth_render_control.depth_clear_enable || regs.depth_render_control.stencil_clear_enable) {
+        return false;
+    }
+    if (regs.color_control.mode != AmdGpu::ColorControl::OperationMode::Disable) {
+        for (u32 cb = 0; cb < AmdGpu::NUM_COLOR_BUFFERS; ++cb) {
+            if (regs.color_buffers[cb] && regs.color_target_mask.GetMask(cb) != 0) {
+                return false;
+            }
+        }
+    }
+    const u32 w = regs.depth_buffer.Pitch(), h = regs.depth_buffer.Height();
+    if (w != h || w < 256 || w > 8192 || !std::has_single_bit(w)) {
+        return false;
+    }
+    const u64 n = shadow_draws_skipped.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (std::has_single_bit(n) && n >= 1024) {
+        std::printf("Quality: shadows off, %llu shadow-map draws skipped (%ux%u)\n",
+                    static_cast<unsigned long long>(n), w, h);
+        std::fflush(stdout);
+    }
+    return true;
+}
+
 void Rasterizer::Draw(bool is_indexed, u32 index_offset, const PreparedDraw* prepared) {
     RENDERER_TRACE;
     Ps4Stats::draws.fetch_add(1, std::memory_order_relaxed);
+    if (SkipShadowCaster(Regs())) {
+        return;
+    }
 
     // with the draw pipeline this thread only selects the pipeline and hands the draw
     // to the recording thread (DrawRecord there); draws FilterDraw handles itself run here.
@@ -990,6 +1026,12 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     }
     DiagPassBoundary(false);
     const auto& regs = Regs();
+    // ORDER1886_GPU_PROFILE without a temporal upscaler: the block below never runs, so the
+    // profiler closes its frames at the display pass here instead.
+    if (!camera_motion->Enabled() && GpuProfiler::Get() && regs.color_buffers[0] &&
+        FrameCapture::IsDisplayBuffer(regs.color_buffers[0].Address())) {
+        GpuProfiler::Get()->BeginFrame();
+    }
     // the pass copying a finished frame to a display buffer; the previous draw's
     // target is that frame.
     if (camera_motion->Enabled() && regs.color_buffers[0] &&
@@ -1114,6 +1156,9 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
                               u32 max_count, VAddr count_address, u16 vertex_sgpr_offset,
                               u16 instance_sgpr_offset) {
     RENDERER_TRACE;
+    if (SkipShadowCaster(Regs())) {
+        return;
+    }
     // like direct draws, handed to the recording thread after the pipeline selection
     // (else the GPU thread waited here for a whole frame of queued draws).
     const bool pipelined = UseDrawPipe() && FilterDrawPasses() &&
