@@ -89,6 +89,22 @@ applied in that run, so the instability is the engine's, at the title demo speci
 (the handoff's "PM4 type-1 crash is pre-existing" note matches). It does not gate this
 feature; it belongs in its own issue.
 
+## Health v1 crashed the boot in 9 seconds — clamp redesign
+
+Owner playtest: toggling Infinite Health in F1 crashed the session within 4–8 s, twice,
+with the same wild RIP as the pre-existing title crash. Boot-time timing made it
+deterministic: `cheats=unlimited-health` from start → `Fault (signal 11) at RIP
+0x7cdbd05a5` at **9 s, twice**; `cheats=` none → 115 s; one-hit-kill only → 77 s (inside
+the title crash's 40–120 s noise band). The 600.0f overwrite — copied from Wander's
+table, which behaves on PS4's laxer memory — clobbers spawn/initialization health values
+on this runtime and the scripts then act on corrupted actors.
+
+The health cave now clamps instead: for the marker entity, `vmaxss xmm0, xmm0,
+[r12+0xd0]` keeps the higher of current and incoming value before the store. Damage is
+ignored; healing, pickups and first-write spawn values pass through unchanged. 39-byte
+cave at 0xf0102d re-assembled and capstone-verified; `cheats-test` passes; boot timing
+with the clamp: recorded below when the run completes.
+
 ## Acceptance (owner, in progress)
 
 Session relaunched with all four rows Off; toggling each in F1 > Mods during gameplay
