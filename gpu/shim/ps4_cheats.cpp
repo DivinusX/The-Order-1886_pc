@@ -14,72 +14,57 @@ namespace Ps4Cheats {
 namespace {
 
 // Instruction bytes from the CUSA00785 APP_VER 01.02 image, verified site by site.
-// The two code caves live in the 126-byte int3 alignment sea at 0xf0102d..0xf010ab
-// (executable, referenced by nothing): the health cave at 0xf0102d, the one-hit-kill
-// cave at 0xf01060. A cave edit expects the sea's 0xCC bytes, so toggling off hands
-// the padding back exactly as it was.
-constexpr unsigned char kHealthStore[] = {0xc4, 0xc1, 0x7a, 0x11, 0x84, 0x24, 0xd0, 0x00, 0x00, 0x00};
-constexpr unsigned char kHealthJmp[] = {0xe9, 0x8d, 0x0a, 0x4f, 0x00, 0x90, 0x90, 0x90, 0x90, 0x90};
-constexpr unsigned char kHealthCave[] = {
-    0x66, 0x41, 0x81, 0x7c, 0x24, 0x30, 0x20, 0xf5, 0x75, 0x0c, 0xc4, 0xc1,
-    0x7a, 0x5f, 0x84, 0x24, 0xd0, 0x00, 0x00, 0x00, 0xeb, 0x0a, 0xc4, 0xc1,
-    0x7a, 0x11, 0x84, 0x24, 0xd0, 0x00, 0x00, 0x00, 0xe9, 0x53, 0xf5, 0xb0,
-    0xff, 0xcc, 0xcc,
-};
+// The one-hit-kill cave lives in the image's int3 alignment sea at 0xf0102d (60 of its
+// 126 bytes); its expected bytes are the sea's 0xCCs, so toggling off hands the padding
+// back exactly. Health needs no cave: the player's damage routine subtracts damage from
+// current health in four bytes, and a same-size copy replaces the subtraction.
+constexpr unsigned char kHealthSubtract[] = {0xc5, 0xf2, 0x5c, 0xc0};        // vsubss xmm0, xmm1, xmm0
+constexpr unsigned char kHealthKeep[] = {0xf3, 0x0f, 0x10, 0xc1};            // movss xmm0, xmm1
 constexpr unsigned char kSubtractRounds[] = {0x29, 0xd8};
 constexpr unsigned char kNop2[] = {0x90, 0x90};
 constexpr unsigned char kChargeMagazine[] = {0x29, 0x82, 0x10, 0x03, 0x00, 0x00};
 constexpr unsigned char kNop6[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
-constexpr unsigned char kDecrement[] = {0xff, 0xc8};
-constexpr unsigned char kDamageStore[] = {0x4c, 0x89, 0x9f, 0xf0, 0x00, 0x00, 0x00};
-constexpr unsigned char kDamageJmp[] = {0xe9, 0x1b, 0x7e, 0x50, 0x00, 0x90, 0x90};
+constexpr unsigned char kDecrementCount[] = {0xff, 0x8f, 0x14, 0x03, 0x00, 0x00};  // dec dword [rdi+0x314]
+constexpr unsigned char kHealthStore[] = {0xc4, 0xc1, 0x7a, 0x11, 0x84, 0x24, 0xd0, 0x00, 0x00, 0x00};
+constexpr unsigned char kOneHitJmp[] = {0xe9, 0x8d, 0x0a, 0x4f, 0x00, 0x90, 0x90, 0x90, 0x90, 0x90};
 constexpr unsigned char kOneHitCave[] = {
-    0x4c, 0x89, 0x9f, 0xf0, 0x00, 0x00, 0x00, 0x48, 0x8b, 0x07, 0xc5, 0xfa,
-    0x10, 0x8f, 0xd0, 0x00, 0x00, 0x00, 0x66, 0x81, 0x7f, 0x30, 0x20, 0xf5,
-    0x74, 0x06, 0xc5, 0xf8, 0x57, 0xc0, 0xeb, 0x04, 0xc5, 0xf2, 0x5c, 0xc0,
-    0xe9, 0xcd, 0x81, 0xaf, 0xff,
+    0x66, 0x41, 0x81, 0x7c, 0x24, 0x30, 0x20, 0xf5, 0x74, 0x19, 0xc4, 0xc1,
+    0xf8, 0x2e, 0x84, 0x24, 0xd0, 0x00, 0x00, 0x00, 0x73, 0x0d, 0x0f, 0x57,
+    0xc9, 0xc4, 0xc1, 0x7a, 0x11, 0x8c, 0x24, 0xd0, 0x00, 0x00, 0x00, 0xc4,
+    0xc1, 0x7a, 0x11, 0x84, 0x24, 0xd0, 0x00, 0x00, 0x00, 0xc4, 0xc1, 0xfa,
+    0x10, 0x8c, 0x24, 0xd4, 0x00, 0x00, 0x00, 0xe9, 0x3c, 0xf5, 0xb0, 0xff,
 };
-// The alignment sea's bytes: what both caves expect to find before writing, and what
-// toggling a cheat off hands back.
-constexpr unsigned char kHealthSea[] = {
+constexpr unsigned char kSea60[] = {
     0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
     0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
-    0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
-};
-constexpr unsigned char kOneHitSea[] = {
     0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
-    0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
-    0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
+    0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
 };
 
-constexpr Edit kHealthEdits[] = {{0xa1059b, kHealthStore, kHealthJmp, sizeof(kHealthStore)},
-                                 {0xf0102d, kHealthSea, kHealthCave, sizeof(kHealthSea)}};
+constexpr Edit kHealthEdits[] = {{0x9f9252, kHealthSubtract, kHealthKeep, sizeof(kHealthSubtract)}};
 constexpr Edit kAmmoEdits[] = {{0x752542, kSubtractRounds, kNop2, sizeof(kSubtractRounds)},
                                {0x55520f, kSubtractRounds, kNop2, sizeof(kSubtractRounds)},
                                {0x70c038, kChargeMagazine, kNop6, sizeof(kChargeMagazine)}};
-constexpr Edit kGrenadeEdits[] = {{0x6e7c0b, kDecrement, kNop2, sizeof(kDecrement)}};
-constexpr Edit kOneHitEdits[] = {{0x9f9240, kDamageStore, kDamageJmp, sizeof(kDamageStore)},
-                                 {0xf01060, kOneHitSea, kOneHitCave, sizeof(kOneHitSea)}};
+constexpr Edit kGrenadeEdits[] = {{0x6ed30d, kDecrementCount, kNop6, sizeof(kDecrementCount)}};
+constexpr Edit kOneHitEdits[] = {{0xa1059b, kHealthStore, kOneHitJmp, sizeof(kHealthStore)},
+                                 {0xf0102d, kSea60, kOneHitCave, sizeof(kSea60)}};
 
 constexpr Cheat kTable[] = {
     {"unlimited-health", "Infinite health",
-     "For the player only - the game's own marker decides it - the health update keeps the "
-     "higher of the current and incoming value: hits no longer lower health, while healing, "
-     "pickups and spawn values pass through untouched. Sequences that wait for the player to "
-     "fall can behave differently while this is on; turn it off to progress.",
+     "The player's damage routine no longer subtracts the incoming damage from current "
+     "health: hits register and animate, but health never falls. Enemies are unaffected. "
+     "Turn it off for sequences that wait for the player to fall.",
      kHealthEdits, std::size(kHealthEdits)},
     {"unlimited-ammo", "Infinite ammunition",
      "Firing never subtracts rounds and reloading never charges them against the reserve: "
      "the magazine and the reserve both stay put.",
      kAmmoEdits, std::size(kAmmoEdits)},
     {"unlimited-grenades", "Infinite throwables",
-     "Grenades and other throwables are never counted down. Instruction site verified on "
-     "APP_VER 01.02; gameplay acceptance is open.",
+     "The inventory's throwable count is never decremented when one is thrown.",
      kGrenadeEdits, std::size(kGrenadeEdits)},
     {"one-hit-kill", "Enemy one-hit kill",
-     "Any damage to an entity that is not the player sets its health to zero: one hit "
-     "kills. Friendly entities hit by the player die the same way; turn it off for "
-     "sequences that need an actor to survive.",
+     "Any real damage to an entity that is not the player sets its health to zero: one hit "
+     "kills. Healing and spawn values pass through untouched, so nothing dies on creation.",
      kOneHitEdits, std::size(kOneHitEdits)},
 };
 

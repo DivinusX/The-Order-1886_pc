@@ -1220,28 +1220,47 @@ void Draw() {
         }
     }
 
-    // Rows on the left, description on the right.
+    // Rows on the left, description on the right. The list scrolls: the focused row is kept
+    // inside the view, so sections below the fold (Mods, Quality on short windows) stay
+    // reachable with the arrows.
     const float top = p0.y + bar + 36.0f * s, bottom = p1.y - 78.0f * s;
     const float left = p0.x + 40.0f * s, inner = p1.x - p0.x - 80.0f * s;
     const float list_w = inner * 0.56f, label_w = list_w * 0.5f;
     const float row_h = 58.0f * s, gap = 12.0f * s;
     const float text = 27.0f * s;
-    float y = top;
+    std::vector<float> ys(count), heads(count, 0.0f);
+    float y = 0.0f;
+    for (int i = 0; i < count; ++i) {
+        if (rows[i].section) {
+            float h = (i > 0 ? 14.0f * s : 0.0f) + TextSize(26.0f * s, rows[i].section).y + 16.0f * s;
+            heads[i] = h;
+            y += h;
+        }
+        ys[i] = y;
+        y += row_h + gap;
+    }
+    const float content = y - gap;
+    const float avail = bottom - top;
+    float shift = 0.0f;
+    if (content > avail) {
+        shift = std::clamp(ys[focused] + row_h - avail, 0.0f, content - avail);
+    }
     const ImVec2 mouse = io.MousePos;
     for (int i = 0; i < count; ++i) {
         Row& r = rows[i];
+        const float ry = top + ys[i] - shift;
+        if (ry + row_h < top || ry > bottom) {
+            continue;  // scrolled out of the list area: not drawn, not clickable
+        }
         if (r.section) {
-            if (i > 0) {
-                y += 14.0f * s;
-            }
+            const float hy = ry - heads[i] + (i > 0 ? 14.0f * s : 0.0f);
             const ImVec2 t = TextSize(26.0f * s, r.section);
-            Text(dl, 26.0f * s, ImVec2(left, y), Accent, r.section);
-            dl->AddLine(ImVec2(left + t.x + 18.0f * s, y + t.y * 0.55f), ImVec2(left + list_w, y + t.y * 0.55f),
+            Text(dl, 26.0f * s, ImVec2(left, hy), Accent, r.section);
+            dl->AddLine(ImVec2(left + t.x + 18.0f * s, hy + t.y * 0.55f), ImVec2(left + list_w, hy + t.y * 0.55f),
                         LineStrong);
-            y += t.y + 16.0f * s;
         }
         const bool focus = i == focused;
-        const ImVec2 a(left, y), m(left + label_w, y + row_h), b(left + list_w, y + row_h);
+        const ImVec2 a(left, ry), m(left + label_w, ry + row_h), b(left + list_w, ry + row_h);
         // Mouse: hovering focuses a row, a click on the value changes it (left half back).
         if (!dialog && mouse.x >= a.x && mouse.x < b.x && mouse.y >= a.y && mouse.y < b.y) {
             if (ImGui::IsMouseClicked(0)) {
@@ -1296,7 +1315,6 @@ void Draw() {
                 Arrow(dl, ImVec2(vb.x - 26.0f * s, cy), 7.0f * s, true, focus ? AccentInk : Muted);
             }
         }
-        y += row_h + gap;
     }
 
     // Description panel for the focused row.
