@@ -889,14 +889,6 @@ void ApplyShadows(int index) {
     Ps4Settings::SaveQuality();
 }
 
-void ApplyTextureQuality(int index) {
-    auto& s = Ps4Settings::Get();
-    s.texture_quality = index;
-    s.quality_generation.fetch_add(1);
-    MarkCustom();
-    Ps4Settings::SaveQuality();
-}
-
 void ApplyQualityAnisotropy(int index) {
     auto& s = Ps4Settings::Get();
     s.quality_anisotropy = QualityAnisotropies[std::clamp(index, 0, QualityAnisotropyCount - 1)];
@@ -990,14 +982,14 @@ std::vector<Row> BuildRows() {
     const int preset = std::clamp(s.quality_preset.load(), 0, int(Ps4Settings::QualityCustom));
     rows.push_back({"Quality", "Preset", Kind::Choice, {"Steam Deck", "Low", "Medium", "High", "Custom"},
                     preset, true, "Quality preset",
-                    "Sets shadows, texture quality, anisotropic filtering and the frame rate together. "
-                    "Steam Deck: shadows off, low textures, 2x filtering, 30 FPS and a 1280-wide render "
-                    "resolution. Low: the same at your render resolution. Medium: shadows on, medium "
-                    "textures, 8x, 60 FPS. High: everything at full quality, 16x, 60 FPS. Changing any "
-                    "option below turns the preset into Custom.",
+                    "Sets shadows, anisotropic filtering and the frame rate together. Steam Deck: "
+                    "shadows off, 2x filtering, 30 FPS and a 1280-wide render resolution. Low: the "
+                    "same at your render resolution. Medium: shadows on, 8x, 60 FPS. High: everything "
+                    "at full quality, 16x, 60 FPS. Changing any option below turns the preset into "
+                    "Custom.",
                     preset != Ps4Settings::QualityCustom
                         ? "Restart the game to apply all preset changes (render resolution and "
-                          "frame-rate profile). Shadows, textures and filtering already changed."
+                          "frame-rate profile). Shadows and filtering already changed."
                         : "",
                     OpenPresetDialog});
     rows.push_back({nullptr, "Shadows", Kind::Toggle, {"Off", "On"}, s.shadows ? 1 : 0, true, "Shadows",
@@ -1005,12 +997,6 @@ std::vector<Row> BuildRows() {
                     "nothing cast a shadow. It saves GPU time and CPU time on the GPU thread, which "
                     "helps most on handhelds and older PCs. Changes right away.",
                     "", ApplyShadows});
-    rows.push_back({nullptr, "Textures", Kind::Choice, {"Low", "Medium", "High"},
-                    std::clamp(s.texture_quality.load(), 0, 2), true, "Texture quality",
-                    "Low and Medium read surface textures two or one detail level down: softer "
-                    "surfaces, less memory bandwidth (the Steam Deck's main limit). Menus, text and "
-                    "the game's own render targets are not affected. Changes right away.",
-                    "", ApplyTextureQuality});
     int aniso = 0;
     for (int i = 0; i < QualityAnisotropyCount; ++i) {
         if (QualityAnisotropies[i] == s.quality_anisotropy) aniso = i;
@@ -1285,13 +1271,11 @@ void Draw() {
         dy += 62.0f * s;
         std::string aniso_text = recipe.anisotropy <= 1 ? std::string("Off")
                                                         : std::to_string(recipe.anisotropy) + "x";
-        static const char* const texture_names[] = {"Low", "Medium", "High"};
         const std::string width_text = recipe.render_width > 0
                                            ? std::to_string(recipe.render_width) + " wide (after restart)"
                                            : std::string("Unchanged");
         const std::pair<const char*, std::string> lines[] = {
             {"Shadows", recipe.shadows ? "On" : "Off"},
-            {"Textures", texture_names[std::clamp(recipe.texture_quality, 0, 2)]},
             {"Anisotropic filtering", aniso_text},
             {"Frame rate", std::to_string(recipe.frame_rate) + " FPS"},
             {"Render resolution", width_text},
@@ -1302,7 +1286,7 @@ void Draw() {
             dy += 40.0f * s;
         }
         dy += 14.0f * s;
-        const char* note = "Shadows, textures, filtering and the frame rate change right away. "
+        const char* note = "Shadows, filtering and the frame rate change right away. "
                            "Restart the game to apply all preset changes.";
         dl->AddRectFilled(ImVec2(a.x + pad, dy), ImVec2(a.x + pad + 4.0f * s, dy + 64.0f * s), Accent);
         Text(dl, 24.0f * s, ImVec2(a.x + pad + 20.0f * s, dy), Ink, note, dw - pad * 2 - 20.0f * s);

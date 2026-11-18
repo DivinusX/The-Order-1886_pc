@@ -1330,7 +1330,8 @@ void TextureCache::RefreshImage(Image& image) {
 
 vk::Sampler TextureCache::GetSampler(const AmdGpu::Sampler& sampler,
                                      AmdGpu::BorderColorBuffer border_color_base,
-                                     const bool is_depth, float extra_lod_bias) {
+                                     const bool is_depth, float extra_lod_bias,
+                                     bool scene_material) {
     // The S# holds an index into a mutable guest table. Snapshot the effective custom color
     // once so the cache key and the Vulkan sampler always describe the same RGBA value
     // (mateussmeneses/theorder1886-port e1ceeabe8): reusing an S# with a different table entry
@@ -1346,7 +1347,8 @@ vk::Sampler TextureCache::GetSampler(const AmdGpu::Sampler& sampler,
                            u64(std::bit_cast<u32>(extra_lod_bias)));
     // The Quality menu (texture quality, anisotropy) makes new samplers when it changes; the old
     // ones age out of the LRU.
-    hash = HashCombine(hash, u64(Ps4Settings::Get().quality_generation.load(std::memory_order_relaxed)));
+    hash = HashCombine(hash, u64(Ps4Settings::Get().quality_generation.load(std::memory_order_relaxed)) * 2 +
+                                 u64(scene_material));
     if (custom_border_color) {
         hash = HashCombine(hash, XXH3_64bits(custom_border_color->data(),
                                              sizeof(*custom_border_color)));
@@ -1355,7 +1357,7 @@ vk::Sampler TextureCache::GetSampler(const AmdGpu::Sampler& sampler,
     std::scoped_lock lock{samplers_mutex};
     const auto [it, new_sampler] = samplers.try_emplace(hash, instance, sampler,
                                                         custom_border_color, is_depth,
-                                                        extra_lod_bias);
+                                                        extra_lod_bias, scene_material);
     if (new_sampler) {
         samplers.at(hash).lru_id = sampler_lru_cache.Insert(hash, gc_tick);
     } else {

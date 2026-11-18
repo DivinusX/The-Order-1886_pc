@@ -324,9 +324,11 @@ std::string SiblingPath(const char* name) {
 
 bool PresetRecipe(int preset, QualityRecipe& out) {
     switch (preset) {
-    case QualityDeck: out = {false, 0, 2, 30, 1280}; return true;
-    case QualityLow: out = {false, 0, 2, 30, 0}; return true;
-    case QualityMedium: out = {true, 1, 8, 60, 0}; return true;
+    // Textures stay High in every preset: the texture-quality clamp also reached the game's
+    // button-prompt icons (drawn like scene geometry), so it is not offered yet.
+    case QualityDeck: out = {false, 2, 2, 30, 1280}; return true;
+    case QualityLow: out = {false, 2, 2, 30, 0}; return true;
+    case QualityMedium: out = {true, 2, 8, 60, 0}; return true;
     case QualityHigh: out = {true, 2, 16, 60, 0}; return true;
     default: return false;
     }
@@ -367,7 +369,8 @@ void LoadQuality() {
         const std::string key = text.substr(0, eq);
         const int value = std::atoi(text.c_str() + eq + 1);
         if (key == "shadows") v.shadows = value != 0;
-        else if (key == "texture_quality") v.texture_quality = std::clamp(value, 0, 2);
+        // texture_quality is not offered yet (see PresetRecipe): an older graphics.ini that
+        // lowered it is ignored and textures stay at full quality.
         else if (key == "anisotropy") v.quality_anisotropy = std::clamp(value, 0, 16);
         else if (key == "preset") v.quality_preset = std::clamp(value, 0, int(QualityCustom));
         else if (key == "ultrawide") v.ultrawide = value != 0;

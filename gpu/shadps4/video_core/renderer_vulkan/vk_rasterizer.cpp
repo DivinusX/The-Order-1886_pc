@@ -2915,8 +2915,22 @@ void Rasterizer::BindSamplers(const Shader::Info& stage, const PreparedStage* pr
             }
             ssharp = AmdGpu::Sampler{};
         }
+        // Texture quality (Quality menu) only reaches scene materials: pixel shaders of
+        // depth-tested draws that write depth (opaque geometry) or several colour targets at
+        // once (the G-buffer and forward passes). The UI also depth-tests, but writes one target
+        // and no depth: its font atlas and button icons keep their full textures.
+        bool scene_material = false;
+        if (stage.sw_stage == Shader::SwStage::Fragment && Regs().depth_control.depth_enable &&
+            Regs().depth_buffer.DepthValid()) {
+            u32 targets = 0;
+            for (u32 cb = 0; cb < AmdGpu::NUM_COLOR_BUFFERS; ++cb) {
+                targets += Regs().color_buffers[cb] && Regs().color_target_mask.GetMask(cb) != 0;
+            }
+            scene_material = Regs().depth_control.depth_write_enable || targets >= 2;
+        }
         const auto vk_sampler = texture_cache.GetSampler(
-            ssharp, Regs().ta_bc_base, sampler.is_depth, sampler.is_depth ? 0.0f : sampler_lod_bias);
+            ssharp, Regs().ta_bc_base, sampler.is_depth, sampler.is_depth ? 0.0f : sampler_lod_bias,
+            scene_material);
         image_infos.emplace_back(vk_sampler, VK_NULL_HANDLE, vk::ImageLayout::eGeneral);
         auto& set_write = set_writes[write_index++];
         set_write.dstSet = VK_NULL_HANDLE;

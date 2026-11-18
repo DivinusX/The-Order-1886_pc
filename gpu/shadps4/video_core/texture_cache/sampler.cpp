@@ -11,7 +11,7 @@ namespace VideoCore {
 
 Sampler::Sampler(const Vulkan::Instance& instance, const AmdGpu::Sampler& sampler,
                  const std::optional<std::array<float, 4>>& custom_border_color,
-                 const bool is_depth, float extra_lod_bias) {
+                 const bool is_depth, float extra_lod_bias, bool scene_material) {
     using namespace Vulkan;
     const bool game_anisotropy = AmdGpu::IsAnisoFilter(sampler.xy_mag_filter) ||
                                  AmdGpu::IsAnisoFilter(sampler.xy_min_filter);
@@ -32,11 +32,13 @@ Sampler::Sampler(const Vulkan::Instance& instance, const AmdGpu::Sampler& sample
     const float requested = std::max(game_aniso, force_anisotropy ? float(forced) : 1.0f);
     const float max_anisotropy =
         anisotropy_enable ? std::clamp(requested, 1.0f, instance.MaxSamplerAnisotropy()) : 1.0f;
-    // Texture quality: mipmapped colour textures start this many levels down (less memory
-    // bandwidth, softer surfaces). Render targets (one level), point lookups and depth
-    // compares keep the game's own range.
+    // Texture quality: mipmapped colour textures of scene materials (pixel shaders of
+    // depth-tested draws) start this many levels down (less memory bandwidth, softer
+    // surfaces). The UI (font atlas, button icons), full-screen passes, compute, render
+    // targets (one level), point lookups and depth compares keep the game's own range: a
+    // lower level of the font atlas turns letters into neighbouring glyphs.
     float min_lod = sampler.MinLod(), max_lod = sampler.MaxLod();
-    const int skip = 2 - std::clamp(settings.texture_quality.load(), 0, 2);
+    const int skip = scene_material ? 2 - std::clamp(settings.texture_quality.load(), 0, 2) : 0;
     if (skip > 0 && !is_depth && sampler.mip_filter != AmdGpu::MipFilter::None && max_lod > 0.0f) {
         min_lod = std::max(min_lod, float(skip));
         max_lod = std::max(max_lod, min_lod);

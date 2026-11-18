@@ -20,7 +20,7 @@ class Sampler {
 public:
     explicit Sampler(const Vulkan::Instance& instance, const AmdGpu::Sampler& sampler,
                      const std::optional<std::array<float, 4>>& custom_border_color, bool is_depth,
-                     float extra_lod_bias = 0.0f);
+                     float extra_lod_bias = 0.0f, bool scene_material = false);
     ~Sampler();
 
     Sampler(const Sampler&) = delete;
