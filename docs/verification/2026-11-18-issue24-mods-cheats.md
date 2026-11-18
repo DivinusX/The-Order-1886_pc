@@ -56,5 +56,40 @@ the same-size ModRM re-encodings replace them.
   (`menu_tab`, runtime.ini). Mods rows toggle live; the footer shows the `Tabs Q E` hint.
   Relaunched visibly with the same state folder: the three saved cheats again applied at
   start, confirmed in the new boot log.
-- Not yet qualified: per-cheat gameplay acceptance in a real session (does health hold, do
-  rounds stop counting, do hits kill in one shot), the live toggle mid-chapter, Windows.
+
+## Rework after the owner's first playtest (same day)
+
+First table shipped: health as an unconditional store-max at the ApplyHealth site, one-hit
+kill as a load→store byte flip. The owner's report: the health edit also applied to
+enemies (they stopped dying), not visibly to the player; one-hit kill did nothing.
+
+That ApplyHealth routine (`0xa1051f`) is the generic per-entity path — the published
+tables only force health behind a marker test (`cmp word [entity+0x30], 0xF520`). The
+reworked table:
+
+| Row | Sites | Edit |
+| --- | --- | --- |
+| Infinite health | `0xa1059b` + cave `0xf0102d` (39 B) | Wander_9.00's own logic re-hosted in-image: marker match → store 600.0f, otherwise the original `vmovss` — the player only |
+| Infinite ammunition | `0x752542`, `0x55520f`, `0x70c038` | the three round-count edits merged into one row (the separate No-reload row is gone; its id is ignored by older graphics.ini files) |
+| Infinite throwables | `0x6e7c0b` | unchanged |
+| Enemy one-hit kill | `0x9f9240` + cave `0xf01060` (41 B) | TakeDamage hook: marker match → original `vsubss`, otherwise new health := 0 before the ApplyHealth vtable call |
+
+Both caves live in the image's own int3 alignment sea (`0xf0102d..0xf010ab`, 126 bytes,
+executable text, referenced by nothing); their expected bytes are the sea's `0xCC`s, so
+toggling off hands the padding back exactly. Cave bytes assembled and disassembly-checked
+against the real image; every site and displacement re-verified through the production
+decode path. `cheats-test` passes against the new table.
+
+## The title-demo crash is pre-existing
+
+While bisecting, a deterministic `Fault (signal 11) at RIP 0x7cdbd05a5` appeared at the
+title screen. Control run with the same build and **`cheats=` empty**: same log line,
+same RIP (`logs/20261118T212224…-boot.log`, ~115 s). The cheat patches were never
+applied in that run, so the instability is the engine's, at the title demo specifically
+(the handoff's "PM4 type-1 crash is pre-existing" note matches). It does not gate this
+feature; it belongs in its own issue.
+
+## Acceptance (owner, in progress)
+
+Session relaunched with all four rows Off; toggling each in F1 > Mods during gameplay
+and reporting the effect is the remaining step.

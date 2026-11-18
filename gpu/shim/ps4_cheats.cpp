@@ -14,47 +14,73 @@ namespace Ps4Cheats {
 namespace {
 
 // Instruction bytes from the CUSA00785 APP_VER 01.02 image, verified site by site.
+// The two code caves live in the 126-byte int3 alignment sea at 0xf0102d..0xf010ab
+// (executable, referenced by nothing): the health cave at 0xf0102d, the one-hit-kill
+// cave at 0xf01060. A cave edit expects the sea's 0xCC bytes, so toggling off hands
+// the padding back exactly as it was.
 constexpr unsigned char kHealthStore[] = {0xc4, 0xc1, 0x7a, 0x11, 0x84, 0x24, 0xd0, 0x00, 0x00, 0x00};
-constexpr unsigned char kHealthStoreMax[] = {0xc4, 0xc1, 0x7a, 0x11, 0x8c, 0x24, 0xd0, 0x00, 0x00, 0x00};
+constexpr unsigned char kHealthJmp[] = {0xe9, 0x8d, 0x0a, 0x4f, 0x00, 0x90, 0x90, 0x90, 0x90, 0x90};
+constexpr unsigned char kHealthCave[] = {
+    0x66, 0x41, 0x81, 0x7c, 0x24, 0x30, 0x20, 0xf5, 0x75, 0x0e, 0x41, 0xc7,
+    0x84, 0x24, 0xd0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x16, 0x44, 0xeb, 0x0a,
+    0xc4, 0xc1, 0x7a, 0x11, 0x84, 0x24, 0xd0, 0x00, 0x00, 0x00, 0xe9, 0x51,
+    0xf5, 0xb0, 0xff,
+};
 constexpr unsigned char kSubtractRounds[] = {0x29, 0xd8};
 constexpr unsigned char kNop2[] = {0x90, 0x90};
 constexpr unsigned char kChargeMagazine[] = {0x29, 0x82, 0x10, 0x03, 0x00, 0x00};
 constexpr unsigned char kNop6[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
 constexpr unsigned char kDecrement[] = {0xff, 0xc8};
-constexpr unsigned char kHealthRead[] = {0xc5, 0xfa, 0x10, 0x80, 0xd0, 0x00, 0x00, 0x00};
-constexpr unsigned char kHealthWrite[] = {0xc5, 0xfa, 0x11, 0x80, 0xd0, 0x00, 0x00, 0x00};
+constexpr unsigned char kDamageStore[] = {0x4c, 0x89, 0x9f, 0xf0, 0x00, 0x00, 0x00};
+constexpr unsigned char kDamageJmp[] = {0xe9, 0x1b, 0x7e, 0x50, 0x00, 0x90, 0x90};
+constexpr unsigned char kOneHitCave[] = {
+    0x4c, 0x89, 0x9f, 0xf0, 0x00, 0x00, 0x00, 0x48, 0x8b, 0x07, 0xc5, 0xfa,
+    0x10, 0x8f, 0xd0, 0x00, 0x00, 0x00, 0x66, 0x81, 0x7f, 0x30, 0x20, 0xf5,
+    0x74, 0x06, 0xc5, 0xf8, 0x57, 0xc0, 0xeb, 0x04, 0xc5, 0xf2, 0x5c, 0xc0,
+    0xe9, 0xcd, 0x81, 0xaf, 0xff,
+};
+// The alignment sea's bytes: what both caves expect to find before writing, and what
+// toggling a cheat off hands back.
+constexpr unsigned char kHealthSea[] = {
+    0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
+    0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
+    0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
+};
+constexpr unsigned char kOneHitSea[] = {
+    0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
+    0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
+    0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
+};
 
-constexpr Edit kHealthEdits[] = {{0xa1059b, kHealthStore, kHealthStoreMax, sizeof(kHealthStore)}};
+constexpr Edit kHealthEdits[] = {{0xa1059b, kHealthStore, kHealthJmp, sizeof(kHealthStore)},
+                                 {0xf0102d, kHealthSea, kHealthCave, sizeof(kHealthSea)}};
 constexpr Edit kAmmoEdits[] = {{0x752542, kSubtractRounds, kNop2, sizeof(kSubtractRounds)},
-                               {0x55520f, kSubtractRounds, kNop2, sizeof(kSubtractRounds)}};
-constexpr Edit kReloadEdits[] = {{0x70c038, kChargeMagazine, kNop6, sizeof(kChargeMagazine)}};
+                               {0x55520f, kSubtractRounds, kNop2, sizeof(kSubtractRounds)},
+                               {0x70c038, kChargeMagazine, kNop6, sizeof(kChargeMagazine)}};
 constexpr Edit kGrenadeEdits[] = {{0x6e7c0b, kDecrement, kNop2, sizeof(kDecrement)}};
-constexpr Edit kOneHitEdits[] = {{0xd5e76e, kHealthRead, kHealthWrite, sizeof(kHealthRead)}};
+constexpr Edit kOneHitEdits[] = {{0x9f9240, kDamageStore, kDamageJmp, sizeof(kDamageStore)},
+                                 {0xf01060, kOneHitSea, kOneHitCave, sizeof(kOneHitSea)}};
 
 constexpr Cheat kTable[] = {
     {"unlimited-health", "Infinite health",
-     "The health update stores the full-health value instead of the post-hit value: hits "
-     "register and animate, but health never falls. Sequences that wait for the player to "
-     "fall can behave differently while this is on; turn it off to progress. "
-     "Instruction site verified on APP_VER 01.02; gameplay acceptance is open.",
-     kHealthEdits, 1},
+     "Only the player keeps their health: the game's own player marker decides it, the "
+     "same test the published cheat used. Hits register and animate, but the player's "
+     "health never falls and enemies still die. Sequences that wait for the player to "
+     "fall can behave differently while this is on; turn it off to progress.",
+     kHealthEdits, std::size(kHealthEdits)},
     {"unlimited-ammo", "Infinite ammunition",
-     "Firing never subtracts rounds from the magazine. Instruction sites verified on "
-     "APP_VER 01.02; gameplay acceptance is open.",
-     kAmmoEdits, 2},
-    {"no-reload", "No reload",
-     "Reloading never charges rounds against the reserve. Instruction site verified on "
-     "APP_VER 01.02; gameplay acceptance is open.",
-     kReloadEdits, 1},
+     "Firing never subtracts rounds and reloading never charges them against the reserve: "
+     "the magazine and the reserve both stay put.",
+     kAmmoEdits, std::size(kAmmoEdits)},
     {"unlimited-grenades", "Infinite throwables",
      "Grenades and other throwables are never counted down. Instruction site verified on "
      "APP_VER 01.02; gameplay acceptance is open.",
-     kGrenadeEdits, 1},
+     kGrenadeEdits, std::size(kGrenadeEdits)},
     {"one-hit-kill", "Enemy one-hit kill",
-     "The damage event writes the incoming amount onto the struck actor's health slot "
-     "instead of reading it. The effect comes from the published table's own playtest, not "
-     "ours; report it if hits do not kill in one shot.",
-     kOneHitEdits, 1},
+     "Any damage to an entity that is not the player sets its health to zero: one hit "
+     "kills. Friendly entities hit by the player die the same way; turn it off for "
+     "sequences that need an actor to survive.",
+     kOneHitEdits, std::size(kOneHitEdits)},
 };
 
 bool Matches(const unsigned char* found, const unsigned char* bytes, size_t length) {

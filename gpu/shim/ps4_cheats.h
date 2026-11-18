@@ -4,10 +4,12 @@
 // so a build whose instructions differ is refused instead of patched blind — the same rule
 // the launcher's preparation recipes follow (scripts/order1886_patches.py).
 // The sites come from the published PS4 cheat tables in the GoldHEN cheat repository
-// ("Infinite Player Health" by Wander_9.00; "Infinite AMMO Usage", "No Reload" and
-// "Infinite Grenade Usage" by Fullcodes), re-expressed without their code caves: every
-// replacement is the same size as the instruction it guards. Byte-for-byte verified
-// against the CUSA00785 APP_VER 01.02 image; gameplay acceptance remains open per cheat.
+// ("Infinite Player Health" by Wander_9.00; the ammunition and grenade sites by Fullcodes),
+// re-expressed against the image's own int3 alignment sea instead of the tables' scratch
+// addresses, and extended with a player-only one-hit-kill at the damage subtraction. The
+// player is told apart from other entities by the marker word the published tables test.
+// Byte-for-byte verified against the CUSA00785 APP_VER 01.02 image; gameplay acceptance
+// remains open per cheat.
 #pragma once
 #include <cstddef>
 #include <cstdint>
