@@ -17,6 +17,13 @@ static int _putenv_s(const char* name, const char* value) {
 }
 #endif
 
+// ps4_settings.cpp carries the cheat table (graphics.ini cheats=); these tests run with no
+// game image, so the loader's guarded access reports "not loaded" and nothing ever patches.
+extern "C" int runtime_guest_peek(uint64_t, unsigned char*, size_t) { return -2; }
+extern "C" int runtime_guest_patch(uint64_t, const unsigned char*, const unsigned char*, size_t) {
+    return -2;
+}
+
 static std::string Read(const char* path) {
     std::ifstream in(path);
     std::stringstream s;

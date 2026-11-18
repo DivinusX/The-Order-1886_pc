@@ -43,6 +43,12 @@ typedef struct { uint64_t base, size, init, tls_address, tls_memsz, tls_filesz, 
 static LinkedModule modules[16];
 static uint64_t module_count;
 static int entered_game;
+/* Live instruction patching for the in-game menu's Mods section (#24): the segment table
+ * and image size, kept reachable so a patch can check a site and give the page back the
+ * protection flags of the segment that owns it. */
+static Segment *guest_segments;
+static uint64_t guest_segment_count;
+static uint64_t guest_image_size;
 static int gpu_enabled;
 static unsigned cpu_missing_sets; /* CPU_SET_* the host lacks; the guest code needs them rewritten */
 static IsaTable *isa_table; /* rewritten sites (--isa-rewrite); the fault handlers and the report read it */
@@ -397,6 +403,38 @@ static void apply_patches(const char *path, Segment *segments, uint64_t ns, cons
     fclose(f);
     printf("Patches: %" PRIu64 " writes, %" PRIu64 " bytes applied, %" PRIu64 " pointers rebased\n",count,bytes,rebased);
 }
+/* Reads image-relative bytes for the GPU shim's in-game menu (#24). 0: copied into out;
+ * -2: the range is not inside one loaded segment. */
+int runtime_guest_peek(uint64_t rva, unsigned char *out, size_t length) {
+    if (!image || !guest_segments || !out || !length || length > 64 ||
+        rva > guest_image_size || length > guest_image_size - rva) return -2;
+    if (!mapped(guest_segments, guest_segment_count, rva, length)) return -2;
+    memcpy(out, image + rva, length);
+    return 0;
+}
+/* Swaps a handful of instruction bytes in the loaded image while the game runs (#24's Mods
+ * cheats): the write happens only when every expected byte is currently at the site, the
+ * pages change protection only for the duration of the write, and they take the owning
+ * segment's flags back after it. Returns 0 applied, -2 the range is outside one loaded
+ * segment, -3 the bytes differ (a build this cheat was not verified against). */
+int runtime_guest_patch(uint64_t rva, const unsigned char *expected,
+                        const unsigned char *replacement, size_t length) {
+    if (!image || !guest_segments || !expected || !replacement || !length || length > 64) return -2;
+    if (rva > guest_image_size || length > guest_image_size - rva) return -2;
+    uint64_t start = rva & ~(uint64_t)(page_size - 1);
+    uint64_t end = round_page(rva + length);
+    for (uint64_t i = 0; i < guest_segment_count; ++i) {
+        if (start < guest_segments[i].address ||
+            end - start > guest_segments[i].size ||
+            start - guest_segments[i].address > guest_segments[i].size - (end - start)) continue;
+        if (memcmp(image + rva, expected, length) != 0) return -3;
+        protect(image + start, end - start, 4 | 2);
+        memcpy(image + rva, replacement, length);
+        protect(image + start, end - start, (unsigned)guest_segments[i].flags);
+        return 0;
+    }
+    return -2;
+}
 /* Restarts the game through run.sh (the settings menu: a new render resolution is a patch
  * applied at start). Descriptors are closed first so the old GPU device and its memory are
  * released before the new process opens its own. */
@@ -656,6 +694,7 @@ int main(int argc, char **argv) {
         if (segments[i].address > size || segments[i].size > size - segments[i].address ||
             segments[i].address % page_size || segments[i].flags > 7) fail("bad segment");
     }
+    guest_segments = segments; guest_segment_count = ns; guest_image_size = size;
     if (fread(names, 128, import_count, f) != import_count) fail("truncated import names");
     for (uint64_t i = 0; i < import_count; ++i)
         if (!memchr(names[i], 0, 128)) fail("unterminated import name");

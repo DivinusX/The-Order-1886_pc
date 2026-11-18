@@ -243,8 +243,13 @@ BUILTIN_IDS = tuple(item['id'] for item in RECIPES)
 
 
 def patch_fingerprint(recipes):
-    """The selection, in the form preparation hashes: order-independent, id plus recipe."""
-    return sorted({'id': item['id'], 'recipe_sha256': recipe_sha256(item)} for item in recipes)
+    """The selection, in the form preparation hashes: order-independent, id plus recipe.
+
+    Sorted by id, not by the whole dict: two selected recipes compare dicts against each
+    other otherwise, which Python refuses.
+    """
+    return sorted(({'id': item['id'], 'recipe_sha256': recipe_sha256(item)} for item in recipes),
+                  key=lambda entry: entry['id'])
 
 def validate_selection(identifiers):
     """A saved selection must name catalogued, non-built-in recipes; order is preserved."""

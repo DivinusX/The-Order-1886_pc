@@ -17,6 +17,7 @@
 #include "ps4_graphics.h"
 #include "ps4_perf_stats.h"
 #include "ps4_guest_image.h"
+#include "ps4_cheats.h"
 
 extern "C" void runtime_restart(void); // src/probe.c: starts run.py again, ends this process
 #include "common/elf_info.h"
@@ -70,6 +71,9 @@ std::string notice_text;
 std::atomic<s64> notice_until{0}; // steady_clock milliseconds
 bool dirty = false; // settings changed while open: saved on close
 int requested_tab = -1; // switch on the next frame (L1/R1, Q/E, menu opened)
+int active_tab = 0;     // the tab being drawn; 0 Graphics, 1 Mods
+constexpr int TabCount = 2;
+const char* const TabNames[TabCount] = {"Graphics", "Mods"};
 // The game's text dialog (SetTextEntry), guarded by imgui_mutex.
 bool text_entry_active = false;
 std::string text_entry_prompt, text_entry_text;
@@ -800,6 +804,7 @@ struct Row {
     const char* body;
     std::string note;          // shown under the body with a gold bar (current effect)
     void (*apply)(int index);  // stores the new value
+    int cheat = -1;            // Mods rows: index into Ps4Cheats::Table(), apply stays null
 };
 
 int focused = 0;
@@ -897,7 +902,51 @@ void ApplyQualityAnisotropy(int index) {
     Ps4Settings::SaveQuality();
 }
 
-std::vector<Row> BuildRows() {
+// ---- Mods (cheats; issue #24) ---------------------------------------------------------------
+// Toggling a cheat patches the loaded image right away: every site's expected bytes are
+// checked first (Ps4Cheats), so a build that differs from the verified one is refused and
+// the row says why. The selection is kept in graphics.ini and reapplied at the next start.
+void ApplyCheatToggle(int cheat, int index) {
+    const Ps4Cheats::Cheat& entry = Ps4Cheats::Table()[cheat];
+    std::string problem;
+    if (!Ps4Cheats::SetEnabled(entry, index == 1, problem)) {
+        std::printf("Cheats: %s: %s\n", entry.id, problem.c_str());
+        std::fflush(stdout);
+        return;  // the image was not touched; the row re-reads its own state next draw
+    }
+    unsigned mask = Ps4Settings::Get().cheat_mask.load(std::memory_order_relaxed);
+    if (index == 1) {
+        mask |= 1u << cheat;
+    } else {
+        mask &= ~(1u << cheat);
+    }
+    Ps4Settings::Get().cheat_mask = mask;
+    Ps4Settings::SaveQuality();
+}
+
+std::vector<Row> BuildModsRows() {
+    std::vector<Row> rows;
+    for (size_t i = 0; i < Ps4Cheats::Count(); ++i) {
+        const Ps4Cheats::Cheat& entry = Ps4Cheats::Table()[i];
+        const Ps4Cheats::State state = Ps4Cheats::Of(entry);
+        const bool known = state != Ps4Cheats::State::Unknown;
+        rows.push_back({i == 0 ? "Cheats" : nullptr, entry.title, Kind::Toggle, {"Off", "On"},
+                        state == Ps4Cheats::State::On ? 1 : 0, known, entry.title, entry.body,
+                        known ? (state == Ps4Cheats::State::On
+                                     ? "Applied. Changes to the game's own instructions; turn it "
+                                       "off to put them back."
+                                     : "")
+                              : "Not available: the instruction bytes at these sites are not the "
+                                "ones verified for this cheat, so this build is refused.",
+                        nullptr, static_cast<int>(i)});
+    }
+    return rows;
+}
+
+std::vector<Row> BuildRows(int tab) {
+    if (tab == 1) {
+        return BuildModsRows();
+    }
     auto& s = Ps4Settings::Get();
     std::vector<Row> rows;
     volatile uint32_t* global = Ps4GuestImage::IntervalGlobal();
@@ -1048,14 +1097,28 @@ void Change(std::vector<Row>& rows, int row, int step) {
     const int next = r.kind == Kind::Toggle ? (step == 0 ? 1 - r.current : std::clamp(r.current + step, 0, 1))
                                             : (r.current + step + count) % count;
     if (next != r.current) {
-        r.apply(next);
+        if (r.cheat >= 0) {
+            ApplyCheatToggle(r.cheat, next);
+        } else {
+            r.apply(next);
+        }
         r.current = next;
         dirty = true;
     }
 }
 
 void Draw() {
-    std::vector<Row> rows = BuildRows();
+    if (requested_tab >= 0) {
+        const int tab = std::clamp(requested_tab, 0, TabCount - 1);
+        requested_tab = -1;
+        if (tab != active_tab) {
+            active_tab = tab;
+            focused = 0;
+            Ps4Settings::Get().menu_tab = tab;
+            dirty = true;
+        }
+    }
+    std::vector<Row> rows = BuildRows(active_tab);
     const int count = int(rows.size());
     focused = std::clamp(focused, 0, count - 1);
 
@@ -1105,6 +1168,12 @@ void Draw() {
         if (pressed(ImGuiKey_RightArrow) || pressed(ImGuiKey_GamepadDpadRight)) {
             Change(rows, focused, 1);
         }
+        if (pressed(ImGuiKey_GamepadL1) || pressed(ImGuiKey_Q)) {
+            requested_tab = (active_tab + TabCount - 1) % TabCount;
+        }
+        if (pressed(ImGuiKey_GamepadR1) || pressed(ImGuiKey_E)) {
+            requested_tab = (active_tab + 1) % TabCount;
+        }
         if (confirm) {
             Change(rows, focused, rows[focused].kind == Kind::Toggle ? 0 : 1);
         }
@@ -1135,9 +1204,21 @@ void Draw() {
     Text(dl, 24.0f * s, ImVec2(p0.x + 28.0f * s, p0.y + 14.0f * s), Accent, "THE ORDER: 1886");
     Text(dl, 18.0f * s, ImVec2(p0.x + 28.0f * s, p0.y + 44.0f * s), Muted, "In-game settings");
     const float tab_x = p0.x + 330.0f * s, tab_w = 210.0f * s;
-    dl->AddRectFilled(ImVec2(tab_x, p0.y), ImVec2(tab_x + tab_w, p0.y + bar), RowFocus);
-    dl->AddRectFilled(ImVec2(tab_x, p0.y + bar - 4.0f * s), ImVec2(tab_x + tab_w, p0.y + bar), Accent);
-    TextCentered(dl, 32.0f * s, ImVec2(tab_x, p0.y), ImVec2(tab_x + tab_w, p0.y + bar), Ink, "Graphics");
+    for (int t = 0; t < TabCount; ++t) {
+        const float x0 = tab_x + float(t) * tab_w, x1 = x0 + tab_w;
+        const bool active = t == active_tab;
+        if (active) {
+            dl->AddRectFilled(ImVec2(x0, p0.y), ImVec2(x1, p0.y + bar), RowFocus);
+            dl->AddRectFilled(ImVec2(x0, p0.y + bar - 4.0f * s), ImVec2(x1, p0.y + bar), Accent);
+        }
+        const bool hover = !dialog && io.MousePos.x >= x0 && io.MousePos.x < x1 &&
+                           io.MousePos.y >= p0.y && io.MousePos.y < p0.y + bar;
+        TextCentered(dl, 32.0f * s, ImVec2(x0, p0.y), ImVec2(x1, p0.y + bar),
+                     active ? Ink : (hover ? Focus : Muted), TabNames[t]);
+        if (hover && !active && ImGui::IsMouseClicked(0)) {
+            requested_tab = t;
+        }
+    }
 
     // Rows on the left, description on the right.
     const float top = p0.y + bar + 36.0f * s, bottom = p1.y - 78.0f * s;
@@ -1240,7 +1321,7 @@ void Draw() {
     dl->AddLine(ImVec2(p0.x, hy - 14.0f * s), ImVec2(p1.x, hy - 14.0f * s), Line);
     struct Hint { const char* label; const char* keys[2]; };
     const Hint hints[] = {{"Choose", {"\xe2\x96\xb2", "\xe2\x96\xbc"}}, {"Change", {"\xe2\x97\x80", "\xe2\x96\xb6"}},
-                          {"Close", {"F1", "Esc"}}};
+                          {"Tabs", {"Q", "E"}}, {"Close", {"F1", "Esc"}}};
     float width = 0.0f;
     for (const Hint& h : hints) {
         width += TextSize(24.0f * s, h.label).x + 12.0f * s + 2 * 40.0f * s + 36.0f * s;

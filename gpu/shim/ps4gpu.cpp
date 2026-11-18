@@ -2,6 +2,7 @@
 // glue between the C loader and the vendored shadPS4 video core.
 #include "ps4_overlay.h"
 #include "ps4_guest_image.h"
+#include "ps4_cheats.h"
 #include "ps4_png.h"
 #include "ps4_settings.h"
 #include "ps4_mouse.h"
@@ -360,6 +361,9 @@ extern "C" int ps4gpu_vibration_percent(void) {
 extern "C" void ps4gpu_set_guest_image(void* base, size_t size) {
     Ps4GuestImage::size.store(size, std::memory_order_release);
     Ps4GuestImage::base.store(static_cast<unsigned char*>(base), std::memory_order_release);
+    // Cheats saved by the menu's Mods section (issue #24) are re-applied to this image now;
+    // sites that do not carry the verified bytes skip themselves and say why.
+    Ps4Cheats::ApplySaved(Ps4Settings::Get().cheat_mask.load(std::memory_order_relaxed));
 }
 extern "C" int ps4gpu_overlay_captures_input(void) {
     return Ps4Overlay::CapturesInput() ? 1 : 0;

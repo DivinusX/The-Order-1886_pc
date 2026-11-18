@@ -432,9 +432,14 @@ target_include_directories(frame-trace-test PRIVATE shim)
 target_compile_options(frame-trace-test PRIVATE -UNDEBUG)
 
 add_executable(perf-overlay-test EXCLUDE_FROM_ALL ../tests/test_perf_overlay.cpp
-    shim/ps4_settings.cpp)
+    shim/ps4_settings.cpp shim/ps4_cheats.cpp)
 target_include_directories(perf-overlay-test PRIVATE shim)
 target_compile_options(perf-overlay-test PRIVATE -UNDEBUG)
+
+add_executable(cheats-test EXCLUDE_FROM_ALL ../tests/test_order1886_cheats.cpp
+    shim/ps4_cheats.cpp)
+target_include_directories(cheats-test PRIVATE shim)
+target_compile_options(cheats-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 add_executable(readback-queue-test EXCLUDE_FROM_ALL ../tests/test_readback_queue.cpp)
 target_include_directories(readback-queue-test PRIVATE shadps4)
 target_compile_options(readback-queue-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)

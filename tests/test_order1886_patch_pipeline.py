@@ -116,6 +116,18 @@ class PreparationPipelineTests(unittest.TestCase):
         self.assertEqual(one, two)
         self.assertNotEqual(one, patches.patch_fingerprint(()))
 
+    def test_fingerprints_sort_several_recipes_by_id(self):
+        # Two selections are hashed together (a cheat plus another recipe): the helper must
+        # order the entries itself, because Python cannot compare the dicts against each
+        # other, and the same pair in reverse order must give the same fingerprint.
+        first = dict(third_party(), id='aaa-test-recipe')
+        second = dict(third_party(), id='bbb-test-recipe',
+                      edits=({'offset': 0x200, 'expected': b'ORIGINAL', 'replacement': b'PATCHED!'},))
+        forward = patches.patch_fingerprint((first, second))
+        reverse = patches.patch_fingerprint((second, first))
+        self.assertEqual(forward, reverse)
+        self.assertEqual([entry['id'] for entry in forward], ['aaa-test-recipe', 'bbb-test-recipe'])
+
 
 if __name__ == '__main__':
     unittest.main()

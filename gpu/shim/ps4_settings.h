@@ -133,6 +133,9 @@ struct Values {
     std::atomic<bool> ultrawide{false};
     /// The prepared image uses Original (2.4:1) framing: the band exists (prepared.json).
     std::atomic<bool> ultrawide_available{false};
+    /// Cheats (issue #24): bit i is Ps4Cheats::Table()[i]. Toggled live in the menu's Mods
+    /// section; the selection persists in graphics.ini and is applied again at start.
+    std::atomic<unsigned> cheat_mask{0};
 };
 
 struct QualityRecipe {
