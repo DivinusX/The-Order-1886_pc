@@ -1132,7 +1132,7 @@ std::vector<Row> BuildRows(int tab) {
         };
         offer(Ps4Settings::UpscalerFsr3, "FSR 3.1 AA + FSR 1");
         offer(Ps4Settings::UpscalerFsr4, "FSR 4 + FSR 1");
-        offer(Ps4Settings::UpscalerDlss, "DLAA + FSR 1");
+        offer(Ps4Settings::UpscalerDlss, "DLSS (DLAA) + FSR 1");
         std::vector<std::string> labels;
         int current = s.fsr1 ? 1 : 0;
         for (size_t i = 0; i < upscaling_choices.size(); ++i) {
@@ -1143,7 +1143,7 @@ std::vector<Row> BuildRows(int tab) {
         const bool pending = requested != running;
         std::string note;
         if (running != Ps4Settings::UpscalerOff) {
-            note = std::string("Running now: ") + (running == Ps4Settings::UpscalerFsr3 ? "FSR 3.1" : running == Ps4Settings::UpscalerDlss ? "DLAA" : "FSR 4") +
+            note = std::string("Running now: ") + (running == Ps4Settings::UpscalerFsr3 ? "FSR 3.1" : running == Ps4Settings::UpscalerDlss ? "DLSS (DLAA)" : "FSR 4") +
                    " replaces the game's temporal anti-aliasing.";
         }
         if (pending) {
@@ -1153,9 +1153,10 @@ std::vector<Row> BuildRows(int tab) {
         rows.push_back({nullptr, "Upscaling", Kind::Choice, labels, current, true, "Upscaling",
                         "How the game's picture reaches the output size. Linear stretches it; FSR 1 "
                         "scales it with edge-aware upsampling (both change right away). FSR 3.1, "
-                        "FSR 4 and DLAA also replace the game's temporal anti-aliasing at the render "
-                        "size, then FSR 1 scales the result; they start at the next launch. Only the "
-                        "ones this GPU supports are listed (DLAA: Windows with an RTX GPU).",
+                        "FSR 4 and DLSS (DLAA) also replace the game's temporal anti-aliasing at the render "
+                        "size, then FSR 1 scales the result; they start at the next launch. When the "
+                        "output matches the render size, FSR 1 has nothing to scale and does not run. "
+                        "Only the ones this GPU supports are listed (DLSS: Windows with an RTX GPU).",
                         note, ApplyUpscaling});
         if (pending) {
             rows.back().badge = "Restart";

@@ -352,10 +352,15 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
         const auto providers = DetectUpscaleProviders(instance);
         ReportUpscalerFallback(Ps4Settings::Get().requested_upscaler, providers);
         // What the in-game menu may offer for the next launch: a provider that loads now, or one
-        // whose device extensions are offered and get enabled once it is the selected upscaler.
+        // whose library loaded but whose instance or device extensions are only enabled once it
+        // is the selected upscaler (DLSS needs instance extensions, FSR 4 device extensions).
+        // Without the instance case DLSS vanished from the menu once deselected (#33).
         unsigned mask = 0;
         for (const auto& provider : providers) {
-            const bool next_launch = provider.reason.find("(offered") != std::string::npos;
+            const bool next_launch = provider.loaded &&
+                                     (provider.reason.find("(offered") != std::string::npos ||
+                                      provider.reason.find("only when it is the selected upscaler") !=
+                                          std::string::npos);
             if (!provider.available && !next_launch) continue;
             for (int u = 1; u < Ps4Settings::UpscalerCount; ++u) {
                 if (std::string_view(provider.key) == Ps4Settings::UpscalerName(u)) mask |= 1u << u;
