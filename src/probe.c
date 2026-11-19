@@ -750,7 +750,6 @@ int main(int argc, char **argv) {
         Ps4GpuConfig gpu={title,serial,gpu_user_dir && *gpu_user_dir ? gpu_user_dir : (user_dir ? user_dir : "user"),(uint32_t)sdk,attributes,1920,1080};
         gpu_enabled=1; /* page tracking starts while the rasterizer registers guest memory */
         if (ps4gpu_init(&gpu)) fail("GPU initialization failed");
-        ps4gpu_set_guest_image(image, size);
         printf("GPU: window and Vulkan presenter ready; SDK 0x%08x, %u HLE symbols\n",(unsigned)sdk,ps4gpu_symbol_count());
     }
     unsigned char *traps = allocate(round_page((import_count + 1) * 32));
@@ -826,6 +825,11 @@ int main(int argc, char **argv) {
             executable_entry = 1;
     }
     if (!executable_entry) fail("entry is not executable");
+    /* Publish the image to the GPU library only now (#35): its present thread starts in
+     * ps4gpu_init above and the FPS counter reads the image every frame (Ps4GuestImage), but
+     * until this point the whole image is PAGE_NOACCESS / PROT_NONE (protect(image, ..., 0))
+     * and its segments are still being re-protected. Publishing earlier faulted at startup. */
+    if (gpu_enabled) ps4gpu_set_guest_image(image, size);
     printf("Mapped %" PRIu64 " bytes, %" PRIu64 " segments; applied %" PRIu64 " relocations\n", size, ns, nr);
     if (native_libc) {
         for (uint64_t m=0;m<module_count;++m) {
