@@ -16,6 +16,8 @@
 
 /* probe.c is not linked into these tests (same stand-in as tests/test_sema.c). */
 void runtime_restart(void) { abort(); }
+int runtime_guest_peek(uint64_t rva, unsigned char *out, size_t length) { (void)rva; (void)out; (void)length; return -2; }
+int runtime_guest_patch(uint64_t rva, const unsigned char *expected, const unsigned char *replacement, size_t length) { (void)rva; (void)expected; (void)replacement; (void)length; return -2; }
 
 #include <errno.h>
 #include <pthread.h>
