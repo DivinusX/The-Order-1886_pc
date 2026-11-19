@@ -26,7 +26,7 @@ REPLACEMENT_INSTRUCTION = bytes.fromhex('c78518fcffff398ee33f')
 #    with another format. The runtime keeps such a view as a separate aliased image and the
 #    sampled texture saw the new glyph late or never ("Eigan." for "Sigan."). Both views keep
 #    the texture's own format now, so the copy lands in the image that is sampled.
-UI_FIX_VERSION = 1
+UI_FIX_VERSION = 2
 UI_SITES = tuple((rva, bytes.fromhex(old), bytes.fromhex(new)) for rva, old, new in (
     # IggyPlayerSetDisplaySize callers: height = width * 5 / 12
     (0x838f09, '448ba0c82d01004531ff4989dd662e0f1f840000000000',
@@ -40,9 +40,14 @@ UI_SITES = tuple((rva, bytes.fromhex(old), bytes.fromhex(new)) for rva, old, new
     # world-to-stage projection: y relative to the band, normalised by the band height
     (0x7a0873, '488b83c83201004885c97807c4e1fa2ad9eb164889ca48d1ea', '488b83c83201004869d156d5000048c1ea11c4e1fa2ad9eb10'),
     (0x7a08b1, '4885c07807c4e1fa2ae0eb164889c148d1e94883e001', '4829d048d1e8c4e1da2ae0c5fa5cc4c4e1da2ae2eb0c'),
-    # font-cache glyph upload: keep the texture's own format on both views
+    # font-cache glyph upload: keep the texture's own format on every view.
+    # 0x87e4c7 / 0x87e5c8 are the two dispatch sites known since v0.2.23. 0x881c59 is a
+    # third setFormat(0x6d) on the same atlas's view, reached at render widths > 1920:
+    # leaving it in creates an aliased image again and the sampled texture misses newly
+    # uploaded glyphs ("Whil p hi g f w d"). Verified only at 1920 before this site.
     (0x87e4c7, 'e804f178ff', '0f1f440000'),
-    (0x87e5c8, 'e803f078ff', '0f1f440000')))
+    (0x87e5c8, 'e803f078ff', '0f1f440000'),
+    (0x881c59, 'e872b978ff', '0f1f440000')))
 WARNING = ('Full-screen 16:9 is experimental. The source patch warns of visual issues at native '
            '1080p; image quality and gameplay require verification. Select Original to recover.')
 
