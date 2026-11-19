@@ -105,7 +105,54 @@ ignored; healing, pickups and first-write spawn values pass through unchanged. 3
 cave at 0xf0102d re-assembled and capstone-verified; `cheats-test` passes; boot timing
 with the clamp: recorded below when the run completes.
 
-## Acceptance (owner, in progress)
+## v3 after the second playtest (same evening)
 
-Session relaunched with all four rows Off; toggling each in F1 > Mods during gameplay
-and reporting the effect is the remaining step.
+Owner: health and throwables did nothing; the Graphics tab still overflowed.
+
+- (Corrected later, see "Final" below: `0x6e7c0b` is not dead code — `je 0x6e7c0b` at
+  `0x6e7b7c` reaches it; it is the second throw path.) The decrement patched here is
+  `dec dword [rdi+0x314]` at `0x6ed30d`, on the inventory manager at `[entity+0x950]`.
+- The player's damage routine (function at `0x9f91df`, victim from `[r13+0xd8]`) keeps
+  authoritative health in the 64-bit store `[rdi+0xf0]` and computes the ApplyHealth
+  argument with `vsubss xmm0, xmm1, xmm0` at `0x9f9252` — four bytes replaced with
+  `movss xmm0, xmm1`: damage never leaves the player, no cave, enemies untouched.
+- One-hit kill now hooks the generic ApplyHealth store (`0xa1059b`, cave `0xf0102d`,
+  60 B) with a damage guard: `vucomiss` incoming vs current, only a real decrease on a
+  non-player entity zeroes health, so spawn writes and heals pass through.
+- F1 menu scrolls: row positions precomputed, the focused row is kept inside the list
+  area, scrolled-out rows are neither drawn nor clickable.
+
+All seven sites re-verified byte-for-byte against the real image; `cheats-test` passes.
+Commit `5785038`. Acceptance: owner relaunches with this build and re-tests in gameplay.
+
+## Final (same night): v7 health, second throw path, one-hit kill rebuilt, menu redesign
+
+Edition: **CUSA00785 – USA, updated to 1.02 (APP_VER 01.02)** — the owner's mandatory dump.
+
+Method: a diagnostic build (not committed; kept as `~/Documents/PS4/order1886-cheats-with-diagnostics.patch`)
+logged every ApplyHealth call (victim, caller, health, listener objects) and ran a memory
+scanner with perf_event hardware write-watchpoints inside the game process.
+
+- **Health v7.** The player and enemies share the health class and its SetHealth, so the v5
+  vtable test changed nothing. The first health listener at `[comp+0x100]` tells them apart:
+  every AI character carries the AI listener (first field `0xa3dd20`); the player carries a
+  HUD listener that differs by chapter (`0x4c0f10`, `0x578650` — v6 keyed on the first and
+  failed in another save). Protected = listener not the AI one and max health ≥ 250 (player
+  450, enemies 100–125). Damage routine `0x9f924a` → cave `0xef9d30` (65 B, two edits).
+- **Throwables.** Grenades behave like a weapon: HUD left = in hand, right = reserve
+  (`[weapon+0x314]`). Besides `0x6ed30d`, the second throw path `dec eax` at `0x6e7c0b`
+  (reached by `je` at `0x6e7b7c`) stores reserve − 1; patched to a 2-byte nop.
+- **One-hit kill.** The old cave stored 0 and then stored the original xmm0 over it, so it
+  never killed anything, and it keyed on the GoldHEN `0xF520` marker that this build does
+  not carry. Rebuilt at `0xf01030` (73 B, two edits) with the v7 player test; the zero is
+  the value stored. Jump at `0xa1059b`.
+- `SetEnabled` writes caves before the jumps into them and restores in reverse.
+- F1 menu redesigned (pills, switches, chips, description card); the Mods tab states that
+  mods apply automatically and are re-applied at every start.
+
+Owner acceptance in play (CUSA00785 1.02): infinite health, ammunition, throwables (aimed and
+hip throws) and one-hit kill all confirmed; the session log showed every enemy hit ending at
+0 hp while the player stayed at 450. Open: a health drop 450→297 once in a session that did
+not pass through the damage routine or ApplyHealth (health regenerated); two GPU ring
+timeouts at load time on cheats builds during the evening (devcoredumps kept), none in the
+last sessions.

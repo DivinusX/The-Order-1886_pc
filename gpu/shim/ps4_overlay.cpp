@@ -778,19 +778,30 @@ namespace Menu {
 constexpr ImU32 Rgba(u32 rgb, float alpha = 1.0f) {
     return IM_COL32((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff, int(alpha * 255.0f));
 }
-constexpr ImU32 Backdrop = IM_COL32(0, 0, 0, 150);
-constexpr ImU32 Panel = Rgba(0x0c0e0f, 0.97f);
-constexpr ImU32 Surface = Rgba(0x141718);
-constexpr ImU32 Surface2 = Rgba(0x1b1e1f);
-constexpr ImU32 Line = IM_COL32(255, 255, 255, 20);
-constexpr ImU32 LineStrong = IM_COL32(255, 255, 255, 38);
-constexpr ImU32 Ink = Rgba(0xf1ede4);
-constexpr ImU32 Muted = Rgba(0x9c9d96);
-constexpr ImU32 Accent = Rgba(0xd8bd77);
-constexpr ImU32 AccentInk = Rgba(0x17150f);
-constexpr ImU32 Focus = Rgba(0xf2d894);
-constexpr ImU32 RowFocus = Rgba(0x2a2418);
-constexpr ImU32 Segment = Rgba(0x3a3122);
+constexpr ImU32 Backdrop = IM_COL32(4, 5, 7, 165);
+constexpr ImU32 BackdropLow = IM_COL32(0, 0, 0, 220);
+constexpr ImU32 Panel = Rgba(0x0d0f12, 0.97f);
+constexpr ImU32 PanelTop = Rgba(0x171a1f, 0.97f);
+constexpr ImU32 Surface = Rgba(0x15181c);
+constexpr ImU32 Surface2 = Rgba(0x1b1f24);
+constexpr ImU32 SurfaceHi = Rgba(0x232830);
+constexpr ImU32 Line = IM_COL32(255, 255, 255, 16);
+constexpr ImU32 LineStrong = IM_COL32(255, 255, 255, 34);
+constexpr ImU32 Ink = Rgba(0xf3efe6);
+constexpr ImU32 Muted = Rgba(0x8f939a);
+constexpr ImU32 Dim = Rgba(0x5d6168);
+constexpr ImU32 Accent = Rgba(0xd9b766);
+constexpr ImU32 AccentSoft = Rgba(0xd9b766, 0.14f);
+constexpr ImU32 AccentLine = Rgba(0xd9b766, 0.55f);
+constexpr ImU32 AccentInk = Rgba(0x16130b);
+constexpr ImU32 Focus = Rgba(0xf4d88f);
+constexpr ImU32 RowFocus = Rgba(0x241f16);
+constexpr ImU32 Good = Rgba(0x7fcf8e);
+constexpr ImU32 GoodSoft = Rgba(0x7fcf8e, 0.14f);
+constexpr ImU32 Warn = Rgba(0xe3a95c);
+constexpr ImU32 WarnSoft = Rgba(0xe3a95c, 0.14f);
+constexpr ImU32 Bad = Rgba(0xdc7d70);
+constexpr ImU32 BadSoft = Rgba(0xdc7d70, 0.14f);
 
 enum class Kind { Choice, Toggle };
 struct Row {
@@ -805,6 +816,8 @@ struct Row {
     std::string note;          // shown under the body with a gold bar (current effect)
     void (*apply)(int index);  // stores the new value
     int cheat = -1;            // Mods rows: index into Ps4Cheats::Table(), apply stays null
+    const char* badge = nullptr;  // short chip after the label ("Active", "Restart", ...)
+    int badge_tone = 0;           // 0 gold, 1 green, 2 amber, 3 red
 };
 
 int focused = 0;
@@ -930,15 +943,23 @@ std::vector<Row> BuildModsRows() {
         const Ps4Cheats::Cheat& entry = Ps4Cheats::Table()[i];
         const Ps4Cheats::State state = Ps4Cheats::Of(entry);
         const bool known = state != Ps4Cheats::State::Unknown;
-        rows.push_back({i == 0 ? "Cheats" : nullptr, entry.title, Kind::Toggle, {"Off", "On"},
-                        state == Ps4Cheats::State::On ? 1 : 0, known, entry.title, entry.body,
-                        known ? (state == Ps4Cheats::State::On
-                                     ? "Applied. Changes to the game's own instructions; turn it "
-                                       "off to put them back."
-                                     : "")
+        const bool on = state == Ps4Cheats::State::On;
+        rows.push_back({i == 0 ? "Cheats" : nullptr, entry.title, Kind::Toggle, {"Off", "On"}, on ? 1 : 0,
+                        known, entry.title, entry.body,
+                        known ? (on ? "Active now. It is applied automatically every time the game starts, "
+                                      "until you switch it off here."
+                                    : "Switch it on and it takes effect immediately: no restart and no "
+                                      "Apply button. It then stays on for every future start.")
                               : "Not available: the instruction bytes at these sites are not the "
                                 "ones verified for this cheat, so this build is refused.",
                         nullptr, static_cast<int>(i)});
+        if (!known) {
+            rows.back().badge = "Unavailable";
+            rows.back().badge_tone = 3;
+        } else if (on) {
+            rows.back().badge = "Active";
+            rows.back().badge_tone = 1;
+        }
     }
     return rows;
 }
@@ -980,6 +1001,10 @@ std::vector<Row> BuildRows(int tab) {
                     "quick-time events in Chapters 6 and 9 can get stuck, so go back to 30 there if one "
                     "does. With V-Sync on, the display's refresh rate is the most you will see.",
                     note, SetGameFrameRate});
+    if (global && rate != 0) {
+        rows.back().badge = "Experimental";
+        rows.back().badge_tone = 2;
+    }
     const int mode = std::clamp(s.display_mode.load(), 0, int(Ps4Graphics::DisplayModeCount) - 1);
     rows.push_back({"Screen", "Window mode", Kind::Choice, {"Window", "Borderless", "Fullscreen"}, mode,
                     true, "Window mode",
@@ -1022,8 +1047,8 @@ std::vector<Row> BuildRows(int tab) {
                         Ps4Settings::SaveQuality();
                     }});
     rows.push_back({"Overlay", "FPS counter", Kind::Toggle, {"Off", "On"}, s.show_fps ? 1 : 0, true,
-                    "FPS counter", "The frame rate and frame time in a corner of the screen. F9 also "
-                    "shows or hides it.",
+                    "FPS counter", "The performance card in a corner of the screen: frame rate, frame "
+                    "time, GPU and CPU load and temperature, memory. F9 also shows or hides it.",
                     "", [](int index) { Ps4Settings::Get().show_fps = index == 1; }});
 
     // Quality: everything here changes right away except the render resolution of the Steam
@@ -1041,6 +1066,8 @@ std::vector<Row> BuildRows(int tab) {
                           "frame-rate profile). Shadows and filtering already changed."
                         : "",
                     OpenPresetDialog});
+    rows.back().badge = "Restart";
+    rows.back().badge_tone = 0;
     rows.push_back({nullptr, "Shadows", Kind::Toggle, {"Off", "On"}, s.shadows ? 1 : 0, true, "Shadows",
                     "Off skips drawing the sun, lamp and torch shadow maps: the scene is lit as if "
                     "nothing cast a shadow. It saves GPU time and CPU time on the GPU thread, which "
@@ -1079,13 +1106,66 @@ void Arrow(ImDrawList* dl, ImVec2 center, float r, bool right, ImU32 color) {
                               ImVec2(center.x - r * 0.8f, center.y), color);
     }
 }
-void KeyCap(ImDrawList* dl, float s, ImVec2& pos, const char* key) {
-    const float size = 22.0f * s;
+void KeyCap(ImDrawList* dl, float s, ImVec2& pos, const char* key, float h = 34.0f) {
+    const float size = 20.0f * s;
+    h *= s;
     const ImVec2 t = TextSize(size, key);
-    const ImVec2 a = pos, b = ImVec2(pos.x + std::max(t.x + 16.0f * s, 34.0f * s), pos.y + 34.0f * s);
-    dl->AddRectFilled(a, b, Ink, 4.0f * s);
-    TextCentered(dl, size, a, b, AccentInk, key);
+    const ImVec2 a = pos, b = ImVec2(pos.x + std::max(t.x + 18.0f * s, h), pos.y + h);
+    dl->AddRectFilled(ImVec2(a.x, a.y + 2.0f * s), ImVec2(b.x, b.y + 2.0f * s), IM_COL32(0, 0, 0, 120), 6.0f * s);
+    dl->AddRectFilled(a, b, SurfaceHi, 6.0f * s);
+    dl->AddRect(a, b, LineStrong, 6.0f * s);
+    TextCentered(dl, size, a, b, Ink, key);
     pos.x = b.x + 6.0f * s;
+}
+// A soft drop shadow: a few widening translucent layers behind a rounded rectangle.
+void Shadow(ImDrawList* dl, ImVec2 a, ImVec2 b, float rounding, float spread, float s) {
+    const int layers = 8;
+    for (int i = layers; i >= 1; --i) {
+        const float g = spread * s * float(i) / float(layers);
+        const float drop = spread * 0.35f * s;
+        dl->AddRectFilled(ImVec2(a.x - g, a.y - g + drop), ImVec2(b.x + g, b.y + g + drop),
+                          IM_COL32(0, 0, 0, int(26.0f * (1.0f - float(i - 1) / float(layers)))), rounding + g);
+    }
+}
+ImU32 ToneInk(int tone) {
+    return tone == 1 ? Good : tone == 2 ? Warn : tone == 3 ? Bad : Accent;
+}
+ImU32 ToneSoft(int tone) {
+    return tone == 1 ? GoodSoft : tone == 2 ? WarnSoft : tone == 3 ? BadSoft : AccentSoft;
+}
+// A small rounded chip; returns its width.
+float Chip(ImDrawList* dl, float s, ImVec2 pos, const char* text, int tone, float size = 17.0f) {
+    const ImVec2 t = TextSize(size * s, text);
+    const ImVec2 a = pos, b(pos.x + t.x + 18.0f * s, pos.y + t.y + 8.0f * s);
+    dl->AddRectFilled(a, b, ToneSoft(tone), (b.y - a.y) * 0.5f);
+    dl->AddRect(a, b, (ToneInk(tone) & 0x00ffffffu) | 0x80000000u, (b.y - a.y) * 0.5f);
+    Text(dl, size * s, ImVec2(a.x + 9.0f * s, a.y + 4.0f * s), ToneInk(tone), text);
+    return b.x - a.x;
+}
+// iOS-style switch: a pill track with a round knob.
+void Switch(ImDrawList* dl, float s, ImVec2 center, bool on, bool focus, bool available) {
+    const float w = 62.0f * s, h = 32.0f * s, r = h * 0.5f;
+    const ImVec2 a(center.x - w * 0.5f, center.y - r), b(center.x + w * 0.5f, center.y + r);
+    const ImU32 track = !available ? Surface2 : on ? Accent : SurfaceHi;
+    dl->AddRectFilled(a, b, track, r);
+    dl->AddRect(a, b, on && available ? (focus ? Focus : AccentLine) : (focus ? AccentLine : LineStrong), r, 0,
+                focus ? 2.0f * s : 1.0f);
+    const float kx = on ? b.x - r : a.x + r;
+    dl->AddCircleFilled(ImVec2(kx, center.y + 1.5f * s), r - 3.0f * s, IM_COL32(0, 0, 0, 90), 24);
+    dl->AddCircleFilled(ImVec2(kx, center.y), r - 4.0f * s, available ? (on ? AccentInk : Ink) : Dim, 24);
+}
+void Chevron(ImDrawList* dl, ImVec2 c, float r, bool right, ImU32 color, float thickness) {
+    const float d = right ? 1.0f : -1.0f;
+    const ImVec2 pts[3] = {ImVec2(c.x - d * r * 0.5f, c.y - r), ImVec2(c.x + d * r * 0.5f, c.y),
+                           ImVec2(c.x - d * r * 0.5f, c.y + r)};
+    dl->AddPolyline(pts, 3, color, 0, thickness);
+}
+std::string Upper(const char* text) {
+    std::string out(text);
+    for (char& c : out) {
+        if (c >= 'a' && c <= 'z') c = char(c - 'a' + 'A');
+    }
+    return out;
 }
 
 void Change(std::vector<Row>& rows, int row, int step) {
@@ -1190,49 +1270,120 @@ void Draw() {
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav |
                      ImGuiWindowFlags_NoBringToFrontOnFocus);
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(ImVec2(0, 0), io.DisplaySize, Backdrop);
+    const ImVec2 mouse = io.MousePos;
+    const auto inside = [&](ImVec2 p, ImVec2 q) {
+        return mouse.x >= p.x && mouse.x < q.x && mouse.y >= p.y && mouse.y < q.y;
+    };
+    dl->AddRectFilledMultiColor(ImVec2(0, 0), io.DisplaySize, Backdrop, Backdrop, BackdropLow, BackdropLow);
 
-    const float margin = std::min(60.0f * s, W * 0.03f);
+    // Panel: shadow, vertical gradient, a gold hairline along the top edge.
+    const float margin = std::min(56.0f * s, W * 0.03f);
+    const float round = 16.0f * s;
     const ImVec2 p0(margin, margin), p1(W - margin, H - margin);
-    dl->AddRectFilled(p0, p1, Panel, 6.0f * s);
-    dl->AddRect(p0, p1, LineStrong, 6.0f * s);
+    Shadow(dl, p0, p1, round, 26.0f, s);
+    dl->AddRectFilled(p0, p1, Panel, round);
+    dl->AddRectFilled(p0, ImVec2(p1.x, p0.y + 96.0f * s), PanelTop, round, ImDrawFlags_RoundCornersTop);
+    dl->AddRect(p0, p1, LineStrong, round);
+    dl->AddLine(ImVec2(p0.x + round * 2, p0.y + 1.0f), ImVec2(p1.x - round * 2, p0.y + 1.0f), AccentLine, 1.5f * s);
 
-    // Top bar: title and the tab row.
-    const float bar = 74.0f * s;
-    dl->AddRectFilled(p0, ImVec2(p1.x, p0.y + bar), Surface, 6.0f * s, ImDrawFlags_RoundCornersTop);
-    dl->AddLine(ImVec2(p0.x, p0.y + bar), ImVec2(p1.x, p0.y + bar), Line);
-    Text(dl, 24.0f * s, ImVec2(p0.x + 28.0f * s, p0.y + 14.0f * s), Accent, "THE ORDER: 1886");
-    Text(dl, 18.0f * s, ImVec2(p0.x + 28.0f * s, p0.y + 44.0f * s), Muted, "In-game settings");
-    const float tab_x = p0.x + 330.0f * s, tab_w = 210.0f * s;
+    // Header: emblem and title on the left, tab pills in the middle-right with Q/E (L1/R1) caps.
+    const float bar = 96.0f * s;
+    const ImVec2 emblem(p0.x + 50.0f * s, p0.y + bar * 0.5f);
+    dl->AddCircle(emblem, 22.0f * s, Accent, 32, 2.0f * s);
+    dl->AddCircle(emblem, 15.0f * s, AccentLine, 32, 1.0f * s);
+    for (int k = 0; k < 4; ++k) {
+        const float ang = 3.14159265f * 0.5f * float(k) + 3.14159265f * 0.25f;
+        const ImVec2 dir(std::cos(ang), std::sin(ang));
+        dl->AddLine(ImVec2(emblem.x + dir.x * 15.0f * s, emblem.y + dir.y * 15.0f * s),
+                    ImVec2(emblem.x + dir.x * 22.0f * s, emblem.y + dir.y * 22.0f * s), Accent, 2.0f * s);
+    }
+    dl->AddCircleFilled(emblem, 5.0f * s, Accent, 16);
+    Text(dl, 27.0f * s, ImVec2(p0.x + 88.0f * s, p0.y + 22.0f * s), Ink, "THE ORDER: 1886");
+    Text(dl, 18.0f * s, ImVec2(p0.x + 89.0f * s, p0.y + 54.0f * s), Muted, "Settings and mods");
+
+    unsigned active_mods = 0;
+    for (unsigned m = Ps4Settings::Get().cheat_mask.load(std::memory_order_relaxed); m; m &= m - 1) {
+        ++active_mods;
+    }
+    const float pill_h = 50.0f * s, pill_w = 196.0f * s, pill_pad = 5.0f * s;
+    const float tabs_w = pill_w * TabCount + pill_pad * 2;
+    const float tabs_x = std::max(p0.x + 420.0f * s, (p0.x + p1.x - tabs_w) * 0.5f);
+    const float tabs_y = p0.y + (bar - pill_h - pill_pad * 2) * 0.5f;
+    const ImVec2 ta(tabs_x, tabs_y), tb(tabs_x + tabs_w, tabs_y + pill_h + pill_pad * 2);
+    dl->AddRectFilled(ta, tb, Surface, (tb.y - ta.y) * 0.5f);
+    dl->AddRect(ta, tb, Line, (tb.y - ta.y) * 0.5f);
     for (int t = 0; t < TabCount; ++t) {
-        const float x0 = tab_x + float(t) * tab_w, x1 = x0 + tab_w;
+        const ImVec2 a(ta.x + pill_pad + pill_w * float(t), ta.y + pill_pad), b(a.x + pill_w, a.y + pill_h);
         const bool active = t == active_tab;
+        const bool hover = !dialog && inside(a, b);
         if (active) {
-            dl->AddRectFilled(ImVec2(x0, p0.y), ImVec2(x1, p0.y + bar), RowFocus);
-            dl->AddRectFilled(ImVec2(x0, p0.y + bar - 4.0f * s), ImVec2(x1, p0.y + bar), Accent);
+            dl->AddRectFilled(a, b, Accent, pill_h * 0.5f);
+        } else if (hover) {
+            dl->AddRectFilled(a, b, SurfaceHi, pill_h * 0.5f);
         }
-        const bool hover = !dialog && io.MousePos.x >= x0 && io.MousePos.x < x1 &&
-                           io.MousePos.y >= p0.y && io.MousePos.y < p0.y + bar;
-        TextCentered(dl, 32.0f * s, ImVec2(x0, p0.y), ImVec2(x1, p0.y + bar),
-                     active ? Ink : (hover ? Focus : Muted), TabNames[t]);
+        const char* name = TabNames[t];
+        const ImVec2 nt = TextSize(25.0f * s, name);
+        std::string count_text;
+        float extra = 0.0f;
+        if (t == 1 && active_mods > 0) {
+            count_text = std::to_string(active_mods);
+            extra = 34.0f * s;
+        }
+        const float tx = (a.x + b.x - nt.x - extra) * 0.5f, ty = (a.y + b.y - nt.y) * 0.5f;
+        Text(dl, 25.0f * s, ImVec2(tx, ty), active ? AccentInk : (hover ? Ink : Muted), name);
+        if (!count_text.empty()) {
+            const ImVec2 c(tx + nt.x + 22.0f * s, (a.y + b.y) * 0.5f);
+            dl->AddCircleFilled(c, 13.0f * s, active ? AccentInk : Good, 20);
+            TextCentered(dl, 17.0f * s, ImVec2(c.x - 13.0f * s, c.y - 13.0f * s), ImVec2(c.x + 13.0f * s, c.y + 13.0f * s),
+                         active ? Accent : AccentInk, count_text.c_str());
+        }
         if (hover && !active && ImGui::IsMouseClicked(0)) {
             requested_tab = t;
         }
     }
+    {
+        ImVec2 q(ta.x - 46.0f * s, ta.y + (tb.y - ta.y - 34.0f * s) * 0.5f);
+        KeyCap(dl, s, q, "Q");
+        ImVec2 e(tb.x + 12.0f * s, q.y);
+        KeyCap(dl, s, e, "E");
+    }
+    dl->AddLine(ImVec2(p0.x + 24.0f * s, p0.y + bar), ImVec2(p1.x - 24.0f * s, p0.y + bar), Line);
 
-    // Rows on the left, description on the right. The list scrolls: the focused row is kept
-    // inside the view, so sections below the fold (Mods, Quality on short windows) stay
-    // reachable with the arrows.
-    const float top = p0.y + bar + 36.0f * s, bottom = p1.y - 78.0f * s;
+    // Content area: the list on the left, the description card on the right.
     const float left = p0.x + 40.0f * s, inner = p1.x - p0.x - 80.0f * s;
-    const float list_w = inner * 0.56f, label_w = list_w * 0.5f;
-    const float row_h = 58.0f * s, gap = 12.0f * s;
-    const float text = 27.0f * s;
+    const float list_w = inner * 0.57f;
+    float top = p0.y + bar + 30.0f * s;
+    const float bottom = p1.y - 84.0f * s;
+
+    // Mods: a banner that says how mods work, above the list.
+    if (active_tab == 1) {
+        const char* head = "Mods apply automatically";
+        const char* body = "Switching a mod changes the game the moment you press it: no restart and no Apply "
+                           "button. Your choice is saved and applied again every time the game starts.";
+        const float wrap = list_w - 110.0f * s;
+        const float body_h = ImGui::GetFont()->CalcTextSizeA(21.0f * s, FLT_MAX, wrap, body).y;
+        const float bh = std::max(64.0f * s, 34.0f * s + body_h + 30.0f * s);
+        const ImVec2 a(left, top), b(left + list_w, top + bh);
+        dl->AddRectFilled(a, b, GoodSoft, 12.0f * s);
+        dl->AddRect(a, b, (Good & 0x00ffffffu) | 0x66000000u, 12.0f * s);
+        const ImVec2 c(a.x + 42.0f * s, a.y + 40.0f * s);
+        dl->AddCircleFilled(c, 19.0f * s, Good, 24);
+        const ImVec2 tick[3] = {ImVec2(c.x - 8.0f * s, c.y + 0.5f * s), ImVec2(c.x - 2.5f * s, c.y + 6.0f * s),
+                                ImVec2(c.x + 8.5f * s, c.y - 6.0f * s)};
+        dl->AddPolyline(tick, 3, AccentInk, 0, 3.0f * s);
+        Text(dl, 24.0f * s, ImVec2(a.x + 80.0f * s, a.y + 16.0f * s), Ink, head);
+        Text(dl, 21.0f * s, ImVec2(a.x + 80.0f * s, a.y + 48.0f * s), Muted, body, wrap);
+        top = b.y + 26.0f * s;
+    }
+
+    const float row_h = 62.0f * s, gap = 10.0f * s, rr = 12.0f * s;
+    const float label_w = list_w * 0.52f;
+    const float text = 25.0f * s;
     std::vector<float> ys(count), heads(count, 0.0f);
     float y = 0.0f;
     for (int i = 0; i < count; ++i) {
         if (rows[i].section) {
-            float h = (i > 0 ? 14.0f * s : 0.0f) + TextSize(26.0f * s, rows[i].section).y + 16.0f * s;
+            const float h = (i > 0 ? 18.0f * s : 0.0f) + 20.0f * s + 14.0f * s;
             heads[i] = h;
             y += h;
         }
@@ -1245,129 +1396,178 @@ void Draw() {
     if (content > avail) {
         shift = std::clamp(ys[focused] + row_h - avail, 0.0f, content - avail);
     }
-    const ImVec2 mouse = io.MousePos;
+    dl->PushClipRect(ImVec2(left - 8.0f * s, top - 4.0f * s), ImVec2(left + list_w + 24.0f * s, bottom + 4.0f * s), true);
     for (int i = 0; i < count; ++i) {
         Row& r = rows[i];
         const float ry = top + ys[i] - shift;
+        if (r.section) {
+            const float hy = ry - heads[i] + (i > 0 ? 18.0f * s : 0.0f);
+            const std::string head = Upper(r.section);
+            const ImVec2 t = TextSize(19.0f * s, head.c_str());
+            const ImVec2 d(left + 6.0f * s, hy + t.y * 0.5f);
+            dl->AddQuadFilled(ImVec2(d.x, d.y - 5.0f * s), ImVec2(d.x + 5.0f * s, d.y), ImVec2(d.x, d.y + 5.0f * s),
+                              ImVec2(d.x - 5.0f * s, d.y), Accent);
+            Text(dl, 19.0f * s, ImVec2(left + 20.0f * s, hy), Accent, head.c_str());
+            dl->AddLine(ImVec2(left + 34.0f * s + t.x, hy + t.y * 0.55f), ImVec2(left + list_w, hy + t.y * 0.55f), Line);
+        }
         if (ry + row_h < top || ry > bottom) {
             continue;  // scrolled out of the list area: not drawn, not clickable
         }
-        if (r.section) {
-            const float hy = ry - heads[i] + (i > 0 ? 14.0f * s : 0.0f);
-            const ImVec2 t = TextSize(26.0f * s, r.section);
-            Text(dl, 26.0f * s, ImVec2(left, hy), Accent, r.section);
-            dl->AddLine(ImVec2(left + t.x + 18.0f * s, hy + t.y * 0.55f), ImVec2(left + list_w, hy + t.y * 0.55f),
-                        LineStrong);
-        }
         const bool focus = i == focused;
-        const ImVec2 a(left, ry), m(left + label_w, ry + row_h), b(left + list_w, ry + row_h);
-        // Mouse: hovering focuses a row, a click on the value changes it (left half back).
-        if (!dialog && mouse.x >= a.x && mouse.x < b.x && mouse.y >= a.y && mouse.y < b.y) {
-            if (ImGui::IsMouseClicked(0)) {
-                focused = i;
-                if (mouse.x >= m.x) {
-                    const bool back = r.kind == Kind::Choice && mouse.x < (m.x + b.x) * 0.5f;
-                    if (r.kind == Kind::Toggle) {
-                        const int target = mouse.x < (m.x + b.x) * 0.5f ? 0 : 1;
-                        if (target != r.current) {
-                            Change(rows, i, 0);
-                        }
-                    } else {
-                        Change(rows, i, back ? -1 : 1);
-                    }
+        const ImVec2 a(left, ry), b(left + list_w, ry + row_h);
+        const ImVec2 va(left + label_w, ry), vb = b;
+        const bool hover = !dialog && inside(a, b) && ry >= top && ry + row_h <= bottom;
+        // Mouse: a click focuses the row; on the value it changes it (left half back for choices).
+        if (hover && ImGui::IsMouseClicked(0)) {
+            focused = i;
+            if (mouse.x >= va.x) {
+                if (r.kind == Kind::Toggle) {
+                    Change(rows, i, 0);
+                } else {
+                    Change(rows, i, mouse.x < (va.x + vb.x) * 0.5f ? -1 : 1);
                 }
             }
         }
-        dl->AddRectFilled(a, ImVec2(m.x, b.y), focus ? RowFocus : Surface2);
-        dl->AddRect(a, b, Line);
+        dl->AddRectFilled(a, b, focus ? RowFocus : (hover ? SurfaceHi : Surface2), rr);
+        dl->AddRect(a, b, focus ? AccentLine : Line, rr, 0, focus ? 1.5f * s : 1.0f);
         if (focus) {
-            dl->AddRectFilled(a, ImVec2(a.x + 5.0f * s, b.y), Accent);
+            dl->AddRectFilled(ImVec2(a.x + 6.0f * s, a.y + 14.0f * s), ImVec2(a.x + 10.0f * s, b.y - 14.0f * s), Accent,
+                              2.0f * s);
         }
-        Text(dl, text, ImVec2(a.x + 26.0f * s, a.y + (row_h - text) * 0.5f - 1.0f * s),
-             r.available ? Ink : Muted, r.label);
-        const ImVec2 va(m.x, a.y), vb(b.x, b.y);
+        const float ly = a.y + (row_h - text) * 0.5f - 1.0f * s;
+        Text(dl, text, ImVec2(a.x + 26.0f * s, ly), r.available ? Ink : Muted, r.label);
+        if (r.badge) {
+            const float lx = a.x + 26.0f * s + TextSize(text, r.label).x + 12.0f * s;
+            if (lx + 90.0f * s < va.x) {
+                Chip(dl, s, ImVec2(lx, a.y + (row_h - 25.0f * s) * 0.5f), r.badge, r.badge_tone, 16.0f);
+            }
+        }
         if (r.kind == Kind::Toggle) {
-            const float half = (vb.x - va.x) * 0.5f, inset = 5.0f * s;
-            for (int k = 0; k < 2; ++k) {
-                const ImVec2 sa(va.x + half * k + inset, va.y + inset), sb(va.x + half * (k + 1) - inset, vb.y - inset);
-                const bool on = k == r.current;
-                if (on) {
-                    dl->AddRectFilled(sa, sb, focus ? Accent : Segment, 2.0f * s);
-                }
-                TextCentered(dl, text, sa, sb, on ? (focus ? AccentInk : Ink) : Muted, r.values[k].c_str());
-            }
-            if (focus) {
-                dl->AddRect(ImVec2(va.x - 1, va.y - 1), ImVec2(vb.x + 1, vb.y + 1), Ink, 3.0f * s, 0, 3.0f * s);
-            }
+            const bool on = r.current == 1;
+            const ImVec2 sc(vb.x - 52.0f * s, (a.y + b.y) * 0.5f);
+            Switch(dl, s, sc, on, focus, r.available);
+            const char* state = r.values[r.current].c_str();
+            const ImVec2 t = TextSize(text, state);
+            Text(dl, text, ImVec2(sc.x - 48.0f * s - t.x, (a.y + b.y - t.y) * 0.5f),
+                 !r.available ? Dim : on ? Ink : Muted, state);
         } else {
+            const ImVec2 ca(va.x + 8.0f * s, a.y + 8.0f * s), cb(vb.x - 8.0f * s, b.y - 8.0f * s);
+            dl->AddRectFilled(ca, cb, focus && r.available ? AccentSoft : Surface, 9.0f * s);
             if (focus) {
-                dl->AddRectFilled(ImVec2(va.x + 5.0f * s, va.y + 5.0f * s), ImVec2(vb.x - 5.0f * s, vb.y - 5.0f * s),
-                                  r.available ? Accent : Segment, 2.0f * s);
-                dl->AddRect(ImVec2(va.x - 1, va.y - 1), ImVec2(vb.x + 1, vb.y + 1), Ink, 3.0f * s, 0, 3.0f * s);
-            } else {
-                dl->AddRectFilled(va, vb, Surface);
+                dl->AddRect(ca, cb, r.available ? AccentLine : LineStrong, 9.0f * s);
             }
-            const ImU32 ink = focus && r.available ? AccentInk : (r.available ? Ink : Muted);
-            TextCentered(dl, text, va, vb, ink, r.values[r.current].c_str());
+            const ImU32 ink = r.available ? (focus ? Focus : Ink) : Muted;
+            const ImVec2 t = TextSize(text, r.values[r.current].c_str());
+            const int n = int(r.values.size());
+            const bool dots = n > 1 && n <= 8;
+            const float cyv = (ca.y + cb.y) * 0.5f - (dots ? 4.0f * s : 0.0f);
+            Text(dl, text, ImVec2((ca.x + cb.x - t.x) * 0.5f, cyv - t.y * 0.5f), ink, r.values[r.current].c_str());
+            if (dots) {
+                const float step = 10.0f * s, dx0 = (ca.x + cb.x) * 0.5f - step * float(n - 1) * 0.5f;
+                for (int k = 0; k < n; ++k) {
+                    dl->AddCircleFilled(ImVec2(dx0 + step * float(k), cb.y - 8.0f * s), k == r.current ? 3.0f * s : 2.0f * s,
+                                        k == r.current ? (r.available ? Accent : Muted) : Dim, 12);
+                }
+            }
             if (r.available) {
-                const float cy = (va.y + vb.y) * 0.5f;
-                Arrow(dl, ImVec2(va.x + 26.0f * s, cy), 7.0f * s, false, focus ? AccentInk : Muted);
-                Arrow(dl, ImVec2(vb.x - 26.0f * s, cy), 7.0f * s, true, focus ? AccentInk : Muted);
+                const ImU32 arrow = focus ? Accent : Muted;
+                Chevron(dl, ImVec2(ca.x + 22.0f * s, (ca.y + cb.y) * 0.5f), 7.0f * s, false, arrow, 2.5f * s);
+                Chevron(dl, ImVec2(cb.x - 22.0f * s, (ca.y + cb.y) * 0.5f), 7.0f * s, true, arrow, 2.5f * s);
             }
         }
     }
-
-    // Description panel for the focused row.
-    const Row& r = rows[focused];
-    const ImVec2 da(left + list_w + 48.0f * s, top), db(p1.x - 40.0f * s, bottom - 10.0f * s);
-    dl->AddRectFilled(da, db, Surface);
-    dl->AddRect(da, db, LineStrong);
-    const float pad = 30.0f * s, wrap = db.x - da.x - pad * 2;
-    float dy = da.y + pad;
-    Text(dl, 32.0f * s, ImVec2(da.x + pad, dy), Focus, r.title);
-    dy += 50.0f * s;
-    Text(dl, 26.0f * s, ImVec2(da.x + pad, dy), Ink, r.body, wrap);  // wrap is a width
-    dy += ImGui::GetFont()->CalcTextSizeA(26.0f * s, FLT_MAX, wrap, r.body).y + 22.0f * s;
-    if (!r.note.empty()) {
-        const ImVec2 t = ImGui::GetFont()->CalcTextSizeA(24.0f * s, FLT_MAX, wrap - 20.0f * s, r.note.c_str());
-        dl->AddRectFilled(ImVec2(da.x + pad, dy), ImVec2(da.x + pad + 4.0f * s, dy + t.y), Accent);
-        Text(dl, 24.0f * s, ImVec2(da.x + pad + 20.0f * s, dy), Muted, r.note.c_str(), wrap - 20.0f * s);
+    dl->PopClipRect();
+    if (content > avail) {
+        // Scroll indicator beside the list.
+        const float tx = left + list_w + 12.0f * s;
+        dl->AddRectFilled(ImVec2(tx, top), ImVec2(tx + 4.0f * s, bottom), Surface2, 2.0f * s);
+        const float h = std::max(avail * avail / content, 40.0f * s);
+        const float y0 = top + (avail - h) * (shift / (content - avail));
+        dl->AddRectFilled(ImVec2(tx, y0), ImVec2(tx + 4.0f * s, y0 + h), AccentLine, 2.0f * s);
     }
 
-    // Key hints, right-aligned like Longshot's.
-    const float hy = p1.y - 58.0f * s;
-    dl->AddLine(ImVec2(p0.x, hy - 14.0f * s), ImVec2(p1.x, hy - 14.0f * s), Line);
+    // Description card for the focused row.
+    const Row& r = rows[focused];
+    const ImVec2 da(left + list_w + 44.0f * s, p0.y + bar + 30.0f * s), db(p1.x - 40.0f * s, bottom);
+    dl->AddRectFilled(da, db, Surface, 14.0f * s);
+    dl->AddRectFilled(da, ImVec2(db.x, da.y + 92.0f * s), Surface2, 14.0f * s, ImDrawFlags_RoundCornersTop);
+    dl->AddRect(da, db, Line, 14.0f * s);
+    const float pad = 32.0f * s, wrap = db.x - da.x - pad * 2;
+    float dy = da.y + pad - 4.0f * s;
+    Text(dl, 31.0f * s, ImVec2(da.x + pad, dy), Focus, r.title);
+    dy += 46.0f * s;
+    dl->AddRectFilled(ImVec2(da.x + pad, dy), ImVec2(da.x + pad + 46.0f * s, dy + 3.0f * s), Accent, 1.5f * s);
+    dy += 20.0f * s;
+    {
+        // Status chips: what the row is doing now.
+        float cx = da.x + pad;
+        if (r.cheat >= 0) {
+            cx += Chip(dl, s, ImVec2(cx, dy), !r.available ? "Unavailable" : r.current ? "Active" : "Off",
+                       !r.available ? 3 : r.current ? 1 : 0) + 10.0f * s;
+            Chip(dl, s, ImVec2(cx, dy), "Applies automatically", 0);
+            dy += 46.0f * s;
+        } else if (r.badge) {
+            Chip(dl, s, ImVec2(cx, dy), r.badge, r.badge_tone);
+            dy += 46.0f * s;
+        } else if (!r.available) {
+            Chip(dl, s, ImVec2(cx, dy), "Unavailable", 3);
+            dy += 46.0f * s;
+        }
+    }
+    Text(dl, 24.0f * s, ImVec2(da.x + pad, dy), Ink, r.body, wrap);  // wrap is a width
+    dy += ImGui::GetFont()->CalcTextSizeA(24.0f * s, FLT_MAX, wrap, r.body).y + 26.0f * s;
+    if (!r.note.empty()) {
+        const float nw = wrap - 44.0f * s;
+        const ImVec2 t = ImGui::GetFont()->CalcTextSizeA(22.0f * s, FLT_MAX, nw, r.note.c_str());
+        const int tone = !r.available ? 3 : (r.cheat >= 0 && r.current) ? 1 : 0;
+        const ImVec2 na(da.x + pad, dy), nb(db.x - pad, dy + t.y + 30.0f * s);
+        dl->AddRectFilled(na, nb, ToneSoft(tone), 10.0f * s);
+        dl->AddRectFilled(ImVec2(na.x, na.y), ImVec2(na.x + 4.0f * s, nb.y), ToneInk(tone), 2.0f * s);
+        Text(dl, 22.0f * s, ImVec2(na.x + 24.0f * s, na.y + 15.0f * s), Ink, r.note.c_str(), nw);
+    }
+
+    // Footer: a reminder on the left, key hints on the right.
+    const float hy = p1.y - 60.0f * s;
+    dl->AddLine(ImVec2(p0.x + 24.0f * s, hy - 16.0f * s), ImVec2(p1.x - 24.0f * s, hy - 16.0f * s), Line);
+    Text(dl, 19.0f * s, ImVec2(p0.x + 40.0f * s, hy + 7.0f * s), Dim,
+         active_tab == 1 ? "Mods are saved as soon as you switch them." : "Settings are saved when you close the menu.");
     struct Hint { const char* label; const char* keys[2]; };
     const Hint hints[] = {{"Choose", {"\xe2\x96\xb2", "\xe2\x96\xbc"}}, {"Change", {"\xe2\x97\x80", "\xe2\x96\xb6"}},
-                          {"Tabs", {"Q", "E"}}, {"Close", {"F1", "Esc"}}};
+                          {"Close", {"F1", "Esc"}}};
     float width = 0.0f;
     for (const Hint& h : hints) {
-        width += TextSize(24.0f * s, h.label).x + 12.0f * s + 2 * 40.0f * s + 36.0f * s;
+        width += TextSize(21.0f * s, h.label).x + 12.0f * s;
+        for (const char* k : h.keys) {
+            width += std::max(TextSize(20.0f * s, k).x + 18.0f * s, 34.0f * s) + 6.0f * s;
+        }
+        width += 26.0f * s;
     }
-    ImVec2 hp(p1.x - 40.0f * s - width, hy);
+    ImVec2 hp(p1.x - 40.0f * s - width + 26.0f * s, hy);
     for (const Hint& h : hints) {
-        Text(dl, 24.0f * s, ImVec2(hp.x, hp.y + 4.0f * s), Ink, h.label);
-        hp.x += TextSize(24.0f * s, h.label).x + 12.0f * s;
+        Text(dl, 21.0f * s, ImVec2(hp.x, hp.y + 5.0f * s), Muted, h.label);
+        hp.x += TextSize(21.0f * s, h.label).x + 12.0f * s;
         KeyCap(dl, s, hp, h.keys[0]);
         KeyCap(dl, s, hp, h.keys[1]);
-        hp.x += 30.0f * s;
+        hp.x += 26.0f * s;
     }
 
     // Preset confirmation dialog: what the preset changes, then Apply / Cancel.
     Ps4Settings::QualityRecipe recipe{};
     if (pending_preset >= 0 && Ps4Settings::PresetRecipe(pending_preset, recipe)) {
-        dl->AddRectFilled(p0, p1, IM_COL32(0, 0, 0, 160), 6.0f * s);
-        const float dw = std::min(820.0f * s, W - 2 * margin - 40.0f * s);
-        const float dh = 560.0f * s;
+        dl->AddRectFilled(p0, p1, IM_COL32(0, 0, 0, 170), round);
+        const float dw = std::min(800.0f * s, W - 2 * margin - 40.0f * s);
+        const float dh = 540.0f * s;
         const ImVec2 a((W - dw) * 0.5f, (H - dh) * 0.5f), b(a.x + dw, a.y + dh);
-        dl->AddRectFilled(a, b, Panel, 8.0f * s);
-        dl->AddRect(a, b, Accent, 8.0f * s, 0, 2.0f * s);
-        const float pad = 34.0f * s;
-        float dy = a.y + pad;
+        Shadow(dl, a, b, 16.0f * s, 30.0f, s);
+        dl->AddRectFilled(a, b, Panel, 16.0f * s);
+        dl->AddRectFilled(a, ImVec2(b.x, a.y + 100.0f * s), PanelTop, 16.0f * s, ImDrawFlags_RoundCornersTop);
+        dl->AddRect(a, b, AccentLine, 16.0f * s, 0, 1.5f * s);
+        const float dpad = 36.0f * s;
+        float ty = a.y + dpad;
         const std::string title =
             std::string("Apply the ") + Ps4Settings::QualityPresetName(pending_preset) + " preset?";
-        Text(dl, 34.0f * s, ImVec2(a.x + pad, dy), Focus, title.c_str());
-        dy += 62.0f * s;
+        Text(dl, 32.0f * s, ImVec2(a.x + dpad, ty), Focus, title.c_str());
+        ty += 58.0f * s;
         std::string aniso_text = recipe.anisotropy <= 1 ? std::string("Off")
                                                         : std::to_string(recipe.anisotropy) + "x";
         const std::string width_text = recipe.render_width > 0
@@ -1380,33 +1580,35 @@ void Draw() {
             {"Render resolution", width_text},
         };
         for (const auto& [label, value] : lines) {
-            Text(dl, 26.0f * s, ImVec2(a.x + pad, dy), Muted, label);
-            Text(dl, 26.0f * s, ImVec2(a.x + dw * 0.5f, dy), Ink, value.c_str());
-            dy += 40.0f * s;
+            const ImVec2 la(a.x + dpad, ty), lb(b.x - dpad, ty + 44.0f * s);
+            dl->AddRectFilled(la, lb, Surface2, 8.0f * s);
+            Text(dl, 23.0f * s, ImVec2(la.x + 18.0f * s, la.y + 10.0f * s), Muted, label);
+            const ImVec2 vt = TextSize(23.0f * s, value.c_str());
+            Text(dl, 23.0f * s, ImVec2(lb.x - 18.0f * s - vt.x, la.y + 10.0f * s), Ink, value.c_str());
+            ty += 52.0f * s;
         }
-        dy += 14.0f * s;
+        ty += 8.0f * s;
         const char* note = "Shadows, filtering and the frame rate change right away. "
                            "Restart the game to apply all preset changes.";
-        dl->AddRectFilled(ImVec2(a.x + pad, dy), ImVec2(a.x + pad + 4.0f * s, dy + 64.0f * s), Accent);
-        Text(dl, 24.0f * s, ImVec2(a.x + pad + 20.0f * s, dy), Ink, note, dw - pad * 2 - 20.0f * s);
+        const float nw = dw - dpad * 2 - 40.0f * s;
+        const float nh = ImGui::GetFont()->CalcTextSizeA(21.0f * s, FLT_MAX, nw, note).y + 26.0f * s;
+        dl->AddRectFilled(ImVec2(a.x + dpad, ty), ImVec2(b.x - dpad, ty + nh), AccentSoft, 10.0f * s);
+        dl->AddRectFilled(ImVec2(a.x + dpad, ty), ImVec2(a.x + dpad + 4.0f * s, ty + nh), Accent, 2.0f * s);
+        Text(dl, 21.0f * s, ImVec2(a.x + dpad + 22.0f * s, ty + 13.0f * s), Ink, note, nw);
         // Buttons: arrows move between them, Enter or the south button presses, east cancels.
-        const float bw = 220.0f * s, bh = 64.0f * s, by = b.y - pad - bh;
-        const ImVec2 apply_a(b.x - pad - bw * 2 - 20.0f * s, by), apply_b(apply_a.x + bw, by + bh);
-        const ImVec2 cancel_a(b.x - pad - bw, by), cancel_b(cancel_a.x + bw, by + bh);
-        const auto inside = [&](ImVec2 p, ImVec2 q) {
-            return mouse.x >= p.x && mouse.x < q.x && mouse.y >= p.y && mouse.y < q.y;
-        };
+        const float bw = 200.0f * s, bh = 58.0f * s, by = b.y - dpad - bh;
+        const ImVec2 apply_a(b.x - dpad - bw * 2 - 16.0f * s, by), apply_b(apply_a.x + bw, by + bh);
+        const ImVec2 cancel_a(b.x - dpad - bw, by), cancel_b(cancel_a.x + bw, by + bh);
         if (inside(apply_a, apply_b)) dialog_focus = 0;
         if (inside(cancel_a, cancel_b)) dialog_focus = 1;
-        const auto button = [&](ImVec2 p, ImVec2 q, const char* label, bool focus) {
-            dl->AddRectFilled(p, q, focus ? Accent : Surface2, 4.0f * s);
-            if (focus) {
-                dl->AddRect(ImVec2(p.x - 2, p.y - 2), ImVec2(q.x + 2, q.y + 2), Ink, 5.0f * s, 0, 2.0f * s);
-            }
-            TextCentered(dl, 28.0f * s, p, q, focus ? AccentInk : Ink, label);
+        const auto button = [&](ImVec2 p, ImVec2 q, const char* label, bool focus, bool primary) {
+            const float br = (q.y - p.y) * 0.5f;
+            dl->AddRectFilled(p, q, focus ? (primary ? Accent : SurfaceHi) : Surface2, br);
+            dl->AddRect(p, q, focus ? Focus : LineStrong, br, 0, focus ? 2.0f * s : 1.0f);
+            TextCentered(dl, 25.0f * s, p, q, focus && primary ? AccentInk : Ink, label);
         };
-        button(apply_a, apply_b, "Apply", dialog_focus == 0);
-        button(cancel_a, cancel_b, "Cancel", dialog_focus == 1);
+        button(apply_a, apply_b, "Apply", dialog_focus == 0, true);
+        button(cancel_a, cancel_b, "Cancel", dialog_focus == 1, false);
         if (ImGui::IsMouseClicked(0)) {
             if (inside(apply_a, apply_b)) {
                 ApplyQualityPreset(pending_preset);

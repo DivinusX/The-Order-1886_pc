@@ -3,15 +3,13 @@
 // to the loaded image while the game runs. Every edit names the bytes it expects to find,
 // so a build whose instructions differ is refused instead of patched blind — the same rule
 // the launcher's preparation recipes follow (scripts/order1886_patches.py).
-// The sites come from the published PS4 cheat tables in the GoldHEN cheat repository
-// (health and one-hit kill after Wander_9.00's and Fullcodes' hooks; the ammunition and
-// grenade sites by Fullcodes), re-expressed against the image's own int3 alignment sea
-// instead of the tables' scratch addresses. Health clamps to the higher of current and
-// incoming rather than storing the tables' 600.0f: the overwrite corrupted spawn and
-// initialization values on this runtime and crashed the title within seconds. The player
-// is told apart from other entities by the marker word the published tables test.
-// Byte-for-byte verified against the CUSA00785 APP_VER 01.02 image; gameplay acceptance
-// remains open per cheat.
+// The ammunition sites come from the published PS4 cheat tables in the GoldHEN cheat
+// repository (Fullcodes); health, throwables and one-hit kill were rebuilt on this runtime
+// from damage and write traces taken in play, with caves in the image's own int3 alignment
+// sea. The player is told apart from enemies by the first health listener: AI characters
+// carry the AI listener, the player does not and has at least 250 maximum health.
+// Byte-for-byte verified against the CUSA00785 APP_VER 01.02 image; each cheat was accepted
+// by the owner in play on that edition.
 #pragma once
 #include <cstddef>
 #include <cstdint>
