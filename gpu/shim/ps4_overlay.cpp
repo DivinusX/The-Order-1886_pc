@@ -921,6 +921,50 @@ void ApplyQualityAnisotropy(int index) {
     Ps4Settings::SaveQuality();
 }
 
+// ---- Render resolution, upscaling and sharpening (Screen) ---------------------------------
+// The render width is a patch the launcher applies when it prepares the game, so the menu
+// stores it in the launcher's settings.json for the next launch. Linear/FSR 1 and sharpening
+// are read by the presenter every frame; a temporal provider (FSR 3.1, FSR 4, DLAA) is picked
+// once at startup, so it is written to runtime.ini (the launcher imports it) for the next launch.
+constexpr int RenderWidths[] = {1280, 1600, 1920, 2560, 3200, 3840};
+std::vector<int> render_choices;
+
+void ApplyRenderWidth(int index) {
+    if (index < 0 || index >= int(render_choices.size())) return;
+    const int width = render_choices[size_t(index)];
+    if (!Ps4Settings::StoreForNextLaunch(width, 0, -1)) {
+        ShowNotice("Could not save the render resolution: set it in the launcher.", 6000);
+        return;
+    }
+    ShowNotice("Render resolution " + std::to_string(width) +
+                   " wide saved. Restart the game to render at the new size.",
+               6000);
+}
+
+struct UpscalingChoice {
+    const char* label;
+    int upscaler; ///< Ps4Settings::Upscaler; UpscalerOff for Linear and FSR 1
+    bool fsr1;
+};
+std::vector<UpscalingChoice> upscaling_choices;
+
+void ApplyUpscaling(int index) {
+    if (index < 0 || index >= int(upscaling_choices.size())) return;
+    auto& s = Ps4Settings::Get();
+    const UpscalingChoice& choice = upscaling_choices[size_t(index)];
+    s.fsr1 = choice.fsr1;                 // live: the presenter reads it every frame
+    s.requested_upscaler = choice.upscaler; // next launch: runtime.ini upscaler= on close
+}
+
+constexpr int SharpenSteps = 5; // Off, 25, 50, 75, 100 %
+void ApplySharpening(int index) {
+    auto& s = Ps4Settings::Get();
+    const int strength = std::clamp(index, 0, SharpenSteps - 1) * 25;
+    s.rcas = strength > 0;
+    if (strength > 0) s.rcas_strength = strength;
+    Ps4Settings::StoreLauncherNumber("sharpness", strength); // the launcher owns this setting
+}
+
 // ---- Mods (cheats; issue #24) ---------------------------------------------------------------
 // Toggling a cheat patches the loaded image right away: every site's expected bytes are
 // checked first (Ps4Cheats), so a build that differs from the verified one is refused and
@@ -1037,6 +1081,99 @@ std::vector<Row> BuildRows(int tab) {
                     "The size the finished picture is scaled to before it is fitted to the window. "
                     "Automatic follows the window. The game still renders its scene at its own size.",
                     size_note, [](int index) { Ps4Settings::Get().output_res = OutputChoices[index]; }});
+
+    // Render resolution: what the game itself renders at (next launch).
+    {
+        render_choices.assign(std::begin(RenderWidths), std::end(RenderWidths));
+        const int next = s.launcher_render_width.load();
+        const int now = s.image_width.load();
+        if (next > 0 && std::find(render_choices.begin(), render_choices.end(), next) == render_choices.end()) {
+            render_choices.push_back(next);
+            std::sort(render_choices.begin(), render_choices.end());
+        }
+        std::vector<std::string> labels;
+        int current = int(std::find(render_choices.begin(), render_choices.end(), 1920) - render_choices.begin());
+        for (size_t i = 0; i < render_choices.size(); ++i) {
+            const int w = render_choices[i];
+            labels.push_back(std::to_string(w) + " wide" + (w == 1920 ? " (Original)" : w == 3840 ? " (native 4K)" : w == 1280 ? " (Steam Deck)" : ""));
+            if (w == (next > 0 ? next : now)) current = int(i);
+        }
+        std::string note;
+        if (now > 0) {
+            note = "The game renders " + std::to_string(now) + " wide now.";
+        }
+        const bool pending = next > 0 && now > 0 && next != now;
+        if (pending) {
+            note += " Restart the game to render at " + std::to_string(next) + " wide (the launcher prepares the game again once).";
+        }
+        rows.push_back({nullptr, "Render resolution", Kind::Choice, labels, current, next > 0,
+                        "Render resolution",
+                        "The size the game itself renders at: every pass, from the scene to the final "
+                        "image, runs at this width, and the height follows the framing. Higher is "
+                        "sharper and costs GPU time and memory; Output resolution only scales the "
+                        "finished picture. Applies at the next launch: the launcher prepares the game "
+                        "for the new size. Sizes other than 1920 are experimental.",
+                        next > 0 ? note : std::string("Not available: the launcher's settings file was not found. Set it in the launcher."),
+                        ApplyRenderWidth});
+        if (pending) {
+            rows.back().badge = "Restart";
+        }
+    }
+
+    // Upscaling: Linear / FSR 1 (live) and the temporal providers (next launch).
+    {
+        upscaling_choices.clear();
+        upscaling_choices.push_back({"Linear", Ps4Settings::UpscalerOff, false});
+        upscaling_choices.push_back({"FSR 1", Ps4Settings::UpscalerOff, true});
+        const unsigned mask = s.upscaler_available_mask.load();
+        const int requested = s.requested_upscaler.load();
+        const auto offer = [&](int upscaler, const char* label) {
+            if ((mask >> upscaler & 1u) || requested == upscaler) upscaling_choices.push_back({label, upscaler, true});
+        };
+        offer(Ps4Settings::UpscalerFsr3, "FSR 3.1 AA + FSR 1");
+        offer(Ps4Settings::UpscalerFsr4, "FSR 4 + FSR 1");
+        offer(Ps4Settings::UpscalerDlss, "DLAA + FSR 1");
+        std::vector<std::string> labels;
+        int current = s.fsr1 ? 1 : 0;
+        for (size_t i = 0; i < upscaling_choices.size(); ++i) {
+            labels.push_back(upscaling_choices[i].label);
+            if (requested != Ps4Settings::UpscalerOff && upscaling_choices[i].upscaler == requested) current = int(i);
+        }
+        const int running = s.startup_requested_upscaler;
+        const bool pending = requested != running;
+        std::string note;
+        if (running != Ps4Settings::UpscalerOff) {
+            note = std::string("Running now: ") + (running == Ps4Settings::UpscalerFsr3 ? "FSR 3.1" : running == Ps4Settings::UpscalerDlss ? "DLAA" : "FSR 4") +
+                   " replaces the game's temporal anti-aliasing.";
+        }
+        if (pending) {
+            note += std::string(note.empty() ? "" : " ") + "Restart the game to " +
+                    (requested == Ps4Settings::UpscalerOff ? "go back to the game's own anti-aliasing." : "start the selected temporal upscaler.");
+        }
+        rows.push_back({nullptr, "Upscaling", Kind::Choice, labels, current, true, "Upscaling",
+                        "How the game's picture reaches the output size. Linear stretches it; FSR 1 "
+                        "scales it with edge-aware upsampling (both change right away). FSR 3.1, "
+                        "FSR 4 and DLAA also replace the game's temporal anti-aliasing at the render "
+                        "size, then FSR 1 scales the result; they start at the next launch. Only the "
+                        "ones this GPU supports are listed (DLAA: Windows with an RTX GPU).",
+                        note, ApplyUpscaling});
+        if (pending) {
+            rows.back().badge = "Restart";
+        }
+    }
+
+    // Sharpening (RCAS): live, saved in the launcher's settings.
+    {
+        const int strength = s.rcas ? std::clamp(s.rcas_strength.load(), 0, 100) : 0;
+        const int current = s.rcas ? std::clamp((strength + 12) / 25, 1, SharpenSteps - 1) : 0;
+        rows.push_back({nullptr, "Sharpening", Kind::Choice, {"Off", "25%", "50%", "75%", "100%"}, current, true,
+                        "Sharpening",
+                        "AMD RCAS sharpening after scaling. It runs with FSR 1, or when the output "
+                        "matches the render size; with Linear scaling to a larger output it has no "
+                        "pass to run in. Changes right away.",
+                        s.rcas && !s.rcas_applied.load() ? "Not running now: choose FSR 1, or an output that matches the render size." : "",
+                        ApplySharpening});
+    }
     const bool ultrawide_ok = s.ultrawide_available.load();
     rows.push_back({nullptr, "Ultrawide (21:9)", Kind::Toggle, {"Off", "Fill screen"},
                     s.ultrawide && ultrawide_ok ? 1 : 0, ultrawide_ok, "Ultrawide (21:9)",

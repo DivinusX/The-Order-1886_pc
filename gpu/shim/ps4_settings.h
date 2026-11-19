@@ -112,6 +112,13 @@ struct Values {
     /// Startup settings for the explicit ORDER1886_RENDER_RES compatibility patch only.
     int startup_preset = NativeAA;
     int startup_upscaler = UpscalerOff;
+    /// The provider requested_upscaler held at startup: the renderer picks it once, so a menu
+    /// change takes effect at the next launch.
+    int startup_requested_upscaler = UpscalerOff;
+    /// Bit (1 << Upscaler) per temporal provider that loads on this device, set by the renderer.
+    std::atomic<unsigned> upscaler_available_mask{0};
+    /// The launcher's render width for the next launch (settings.json), 0 when unknown.
+    std::atomic<int> launcher_render_width{0};
     bool startup_object_motion = false;
     int startup_output_res = OutputDefault;
     int startup_live_resolution = 0;
@@ -180,6 +187,9 @@ void SaveQuality();
 /// next Play prepares the game with them (the render resolution cannot change while it runs).
 /// Returns false when the file is missing or has no such keys.
 bool StoreForNextLaunch(int render_width, int frame_rate, int anisotropy);
+/// One numeric launcher setting (settings.json key) for the next launch; false when the file
+/// or the key is missing.
+bool StoreLauncherNumber(const char* key, int value);
 
 /// Render resolution divisor of a preset (1.0 native, 1.5 quality, ...).
 float PresetScale(int preset);

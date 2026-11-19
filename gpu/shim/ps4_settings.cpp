@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <string>
 #include <string_view>
 
@@ -207,6 +208,7 @@ void Load() {
     v.stale_readback = false;
     v.startup_preset = v.preset;
     v.startup_upscaler = v.upscaler;
+    v.startup_requested_upscaler = v.requested_upscaler;
     v.startup_object_motion = v.object_motion;
     v.startup_output_res = v.output_res;
     v.startup_live_resolution = v.live_resolution;
@@ -354,6 +356,24 @@ void LoadQuality() {
         v.ultrawide_available = prepared.find("\"aspect_ratio\": \"original\"") != std::string::npos &&
                                 prepared.find("\"aspect_ratio\": \"16:9\"") == std::string::npos;
     }
+    // The render width the launcher will prepare next (Custom stores 0 and the width beside it).
+    {
+        std::string saved;
+        if (FILE* file = std::fopen(SiblingPath("settings.json").c_str(), "rb")) {
+            char buffer[4096];
+            for (size_t n; (n = std::fread(buffer, 1, sizeof(buffer), file)) > 0;) saved.append(buffer, n);
+            std::fclose(file);
+        }
+        const auto number = [&](const char* key) {
+            const size_t at = saved.find(std::string("\"") + key + "\"");
+            if (at == std::string::npos) return -1;
+            const size_t colon = saved.find(':', at);
+            return colon == std::string::npos ? -1 : std::atoi(saved.c_str() + colon + 1);
+        };
+        int width = number("render_width");
+        if (width == 0) width = number("custom_render_width");
+        v.launcher_render_width = width > 0 ? width : 0;
+    }
     const std::string path = SiblingPath("graphics.ini");
     FILE* file = std::fopen(path.c_str(), "r");
     if (!file) {
@@ -408,7 +428,9 @@ void SaveQuality() {
     std::fclose(file);
 }
 
-bool StoreForNextLaunch(int render_width, int frame_rate, int anisotropy) {
+namespace {
+// Replace the numbers after "key": in place; the launcher owns the rest of the file.
+bool EditLauncherNumbers(std::initializer_list<std::pair<const char*, int>> values) {
     const std::string path = SiblingPath("settings.json");
     std::string text;
     if (FILE* file = std::fopen(path.c_str(), "rb")) {
@@ -419,7 +441,6 @@ bool StoreForNextLaunch(int render_width, int frame_rate, int anisotropy) {
     if (text.empty()) {
         return false;
     }
-    // Replace the number after "key": in place; the launcher owns the rest of the file.
     const auto set = [&](const char* key, int value) {
         const std::string quoted = std::string("\"") + key + "\"";
         size_t at = text.find(quoted);
@@ -437,9 +458,9 @@ bool StoreForNextLaunch(int render_width, int frame_rate, int anisotropy) {
         return true;
     };
     bool changed = false;
-    if (render_width > 0) changed |= set("render_width", render_width);
-    if (frame_rate > 0) changed |= set("frame_rate", frame_rate);
-    if (anisotropy >= 0) changed |= set("anisotropy", anisotropy);
+    for (const auto& [key, value] : values) {
+        changed |= set(key, value);
+    }
     if (!changed) {
         return false;
     }
@@ -457,6 +478,22 @@ bool StoreForNextLaunch(int render_width, int frame_rate, int anisotropy) {
     std::remove(path.c_str());
 #endif
     return std::rename(temp.c_str(), path.c_str()) == 0;
+}
+} // namespace
+
+bool StoreForNextLaunch(int render_width, int frame_rate, int anisotropy) {
+    // A key the caller leaves out (0 width or rate, negative anisotropy) is not touched.
+    const bool ok = EditLauncherNumbers({{"render_width", render_width > 0 ? render_width : -1},
+                                         {"frame_rate", frame_rate > 0 ? frame_rate : -1},
+                                         {"anisotropy", anisotropy}});
+    if (ok && render_width > 0) {
+        Get().launcher_render_width = render_width;
+    }
+    return ok;
+}
+
+bool StoreLauncherNumber(const char* key, int value) {
+    return EditLauncherNumbers({{key, value}});
 }
 
 float PresetScale(int preset) {

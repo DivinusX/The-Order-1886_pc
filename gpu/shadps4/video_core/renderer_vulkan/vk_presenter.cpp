@@ -348,7 +348,21 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
     // derivatives; ask the device once, before any provider loads (#12).
     Ps4Settings::ConfigureUpscalerSupport(instance.IsFsr4Int8Supported(),
                                           instance.IsFsr411Supported(), nullptr);
-    ReportUpscalerFallback(Ps4Settings::Get().requested_upscaler, DetectUpscaleProviders(instance));
+    {
+        const auto providers = DetectUpscaleProviders(instance);
+        ReportUpscalerFallback(Ps4Settings::Get().requested_upscaler, providers);
+        // What the in-game menu may offer for the next launch: a provider that loads now, or one
+        // whose device extensions are offered and get enabled once it is the selected upscaler.
+        unsigned mask = 0;
+        for (const auto& provider : providers) {
+            const bool next_launch = provider.reason.find("(offered") != std::string::npos;
+            if (!provider.available && !next_launch) continue;
+            for (int u = 1; u < Ps4Settings::UpscalerCount; ++u) {
+                if (std::string_view(provider.key) == Ps4Settings::UpscalerName(u)) mask |= 1u << u;
+            }
+        }
+        Ps4Settings::Get().upscaler_available_mask = mask;
+    }
     pp_pass.Create(device, swapchain.GetSurfaceFormat().format);
     Ps4Overlay::Init(instance, swapchain.GetSurfaceFormat().format, num_images);
 

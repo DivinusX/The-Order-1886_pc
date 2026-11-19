@@ -76,9 +76,14 @@ class OriginalResolutionPathTests(unittest.TestCase):
         self.assertNotIn('internal_width', values)
         self.assertNotIn('output_resolution', values)
 
-    def test_native_four_k_is_drawn_by_the_game_and_presented_one_to_one(self):
+    def test_native_four_k_is_drawn_by_the_game_and_keeps_the_upscaling_choice(self):
+        # The render size is a preparation patch; the upscaling choice still applies on top of it
+        # (a temporal provider at the render size, FSR 1 to the output).
         values = runtime_settings({'presentation_filter': 'dlss', 'render_width': 3840})
         self.assertEqual(values['render_resolution'], '3840x1600')
+        self.assertEqual(values['presentation_filter'], 'fsr1')
+        self.assertEqual(values['upscaler'], 'dlss')
+        values = runtime_settings({'presentation_filter': 'linear', 'render_width': 2560})
         self.assertEqual(values['presentation_filter'], 'linear')
         self.assertNotIn('upscaler', values)
         values = runtime_settings({'render_width': 3840, 'aspect_ratio': '16:9'})

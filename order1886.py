@@ -651,11 +651,12 @@ def write_runtime_config(user, settings):
     upscaler = presentation_filter if presentation_filter in TEMPORAL_PROVIDERS else None
     if upscaler:
         presentation_filter = 'fsr1'
-    # A render size the game draws itself is presented 1:1: no temporal provider, no FSR.
+    # The upscaling choice applies at every render size: a temporal provider replaces the game's
+    # resolve at the scene size it finds (verified at 2560x1067 with FSR 3.1), and FSR 1 scales the
+    # result to the output. Only the render size itself is a preparation patch.
     render_width = resolution.validate_width(settings.get('render_width', resolution.NATIVE_WIDTH))
     render_resolution = 'native'
     if render_width != resolution.NATIVE_WIDTH:
-        presentation_filter, upscaler = 'linear', None
         render_resolution = '{}x{}'.format(*resolution.scene_size(render_width, settings.get('aspect_ratio', 'original')))
     frame_rate = timing.validate_frame_rate(settings.get('frame_rate', 30))
     profile = timing_profile(settings)
