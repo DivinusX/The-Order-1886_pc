@@ -46,7 +46,7 @@ need are tracked in #7, and the providers themselves in #10–#13.
 
 Graphics → **Render resolution** makes the game itself render at a larger (or smaller)
 size: 1280 (the Steam Deck's screen width), Original (1920 wide), 2560, 3840 (native 4K) or a custom width (multiple of 16, 1280
-to 4880; 4192 with 16:9 framing). The height follows **Framing**: width/2.4 for Original
+to 4640; 4000 with 16:9 framing). The height follows **Framing**: width/2.4 for Original
 (3840×1600, letterboxed into 3840×2160) and the full 16:9 frame for 16:9 (3840×2160).
 
 How (`scripts/order1886_resolution.py`, applied to the prepared copy of the executable,
@@ -66,7 +66,7 @@ every site byte-checked first, original files unchanged):
   by the same amount. The launcher raises guest direct memory to match
   (`ORDER1886_DMEM_MB`, 5818 MiB at 3840×1600).
 
-The signed 32-bit immediates of those sites cap the width (4880 Original, 4192 16:9).
+The signed 32-bit immediates of those sites cap the width (4640 Original, 4000 16:9; the heap also carries the scaled Iggy render-target pool).
 
 At any render size other than the original (larger or smaller) Upscaling is set aside:
 `presentation_filter=linear`, no temporal provider. The game's own frame is the presented

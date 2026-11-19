@@ -338,7 +338,7 @@ UI_KEYS = [
     'Use current saves',
     'Use current saves, or choose a complete backup to restore before Play. Current saves are backed up before replacement.',
     'Use installation runtime',
-    'Used when Render resolution is Custom: a multiple of 16 from 1280 to 4880 (4192 with 16:9 framing).',
+    'Used when Render resolution is Custom: a multiple of 16 from 1280 to 4640 (4000 with 16:9 framing).',
     'VBlank',
     'VSync',
     'Valid changes save automatically. Game settings take effect on the next launch.',

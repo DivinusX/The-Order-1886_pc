@@ -19,7 +19,7 @@ import struct
 import order1886_frame_rate as timing
 
 NATIVE_WIDTH = 1920
-MIN_WIDTH, MAX_WIDTH = 1280, 4880
+MIN_WIDTH, MAX_WIDTH = 1280, 4640
 BRANCH_RVA = 0x44cef5
 EXPECTED_BRANCH = bytes.fromhex('7441')  # je: skip the 720p mode unless its flag bit is set
 REPLACEMENT_BRANCH = bytes.fromhex('7541')
@@ -33,7 +33,7 @@ SCENE = ((0x839c54, bytes.fromhex('bf80070000')), (0x839c59, bytes.fromhex('be20
 # sub-stacks used at different times. A larger frame overflows A into B and C, so live targets
 # overlap. Each partition scales with the scene's pixel count; the GPU heap the stack is carved
 # from (allocate, map, record, release) grows by the same amount. Immediates are signed 32-bit,
-# which caps the width: 4880 at Original, 4192 at 16:9.
+# which caps the width: 4640 at Original, 4000 at 16:9 (the Iggy pool below grows the heap too).
 STACK = {'a': 0xa200000, 'b': 0x1300000, 'c': 0x4900000}
 STACK_SITES = (  # (rva, original bytes, immediate offset, value)
     (0xca6030, bytes.fromhex('b80000e00f'), 1, 'total'),
@@ -48,6 +48,18 @@ STACK_SITES = (  # (rva, original bytes, immediate offset, value)
 HEAP_SIZE = 0x28e00000
 HEAP_SITES = ((0x298d0b, bytes.fromhex('ba0000e028'), 1), (0x298d33, bytes.fromhex('be0000e028'), 1),
               (0x298d63, bytes.fromhex('48c705c29741010000e028'), 7), (0x2997cc, bytes.fromhex('be0000e028'), 1))
+# The Flash UI (Iggy) draws masks, filters and anti-aliased shapes into offscreen render
+# targets of the GDraw context's size, which is the scene size above (the SCENE immediates are
+# gdraw_orbis_CreateContext's width and height). Their pool is a fixed 32 MiB
+# (gdraw_orbis_SetResourceMemory(rendertarget, 0, ptr, 32 MiB), carved from a GPU layout
+# request of the same size): five 1920x800 targets, but one at 3840x1600. Above 1920 the
+# allocations fail ("GDraw rendertarget allocation failed: out of rendertarget texture
+# memory", thousands per minute) and Iggy draws without them: menus and HUD turn into flat
+# grey/black polygons, worse the larger the render size. The pool scales with the scene's
+# pixel count like the render-target stack, so it always holds the same five targets.
+IGGY_RT_POOL = 0x2000000
+IGGY_RT_SITES = ((0x839bb7, bytes.fromhex('ba00000002'), 1),   # GPU layout request (mov edx)
+                 (0x839c0d, bytes.fromhex('b900000002'), 1))   # SetResourceMemory bytes (mov ecx)
 RETAIL_DMEM_MB = 5056
 WARNING = ('Render sizes other than the original are experimental: image quality, memory use and '
            'gameplay require verification. Select Original to recover.')
@@ -83,9 +95,17 @@ def stack(width, aspect='original'):
     return {**size, 'a+b': size['a'] + size['b'], 'total': size['a'] + size['b'] + size['c']}
 
 
+def iggy_rt_pool(width, aspect='original'):
+    """Bytes of the Iggy render-target pool for this scene, in whole MiB."""
+    w, h = scene_size(width, aspect)
+    ratio = max(1.0, w * h / (1920 * 800))
+    return -(-int(IGGY_RT_POOL * ratio) // 0x100000) * 0x100000
+
+
 def growth(width, aspect='original'):
     """Bytes the GPU heap, and so guest direct memory, grows by: whole 2 MiB pages."""
-    return -(-(stack(width, aspect)['total'] - sum(STACK.values())) // 0x200000) * 0x200000
+    extra = stack(width, aspect)['total'] - sum(STACK.values()) + iggy_rt_pool(width, aspect) - IGGY_RT_POOL
+    return -(-extra // 0x200000) * 0x200000
 
 
 def dmem_mb(width, aspect='original'):
@@ -100,9 +120,10 @@ def recipe(width, aspect='original'):
     if width == NATIVE_WIDTH:
         return dict(id='order1886-original-resolution-v1', render_width=width, experimental=False)
     w, h = size(width)
-    return dict(id='order1886-resolution-v1', render_width=w, render_height=h, aspect_ratio=aspect,
+    return dict(id='order1886-resolution-v2', render_width=w, render_height=h, aspect_ratio=aspect,
                 scene_size=list(scene_size(width, aspect)), stack_total=hex(stack(width, aspect)['total']),
                 heap_size=hex(HEAP_SIZE + growth(width, aspect)), dmem_mb=dmem_mb(width, aspect),
+                iggy_rendertarget_pool=hex(iggy_rt_pool(width, aspect)),
                 experimental=True,
                 title_ids=list(timing.editions.TITLE_IDS), branch_rva=hex(BRANCH_RVA),
                 store_rvas=[hex(rva) for rva, _ in STORES + SCENE],
@@ -118,7 +139,8 @@ def recipe_sha256(width, aspect='original'):
 
 def sites():
     return [(BRANCH_RVA, EXPECTED_BRANCH), *STORES, *SCENE, *((rva, expected) for rva, expected, *_ in STACK_SITES),
-            *((rva, expected) for rva, expected, _ in HEAP_SITES)]
+            *((rva, expected) for rva, expected, _ in HEAP_SITES),
+            *((rva, expected) for rva, expected, _ in IGGY_RT_SITES)]
 
 
 def validate_source(eboot, width, metadata, aspect='original'):
@@ -159,6 +181,8 @@ def apply_prepared(boot, profile):
         data[start + rva + at:start + rva + at + 4] = struct.pack('<I', sizes[key])
     for rva, _, at in HEAP_SITES:
         data[start + rva + at:start + rva + at + 4] = struct.pack('<I', HEAP_SIZE + growth(width, aspect))
+    for rva, _, at in IGGY_RT_SITES:
+        data[start + rva + at:start + rva + at + 4] = struct.pack('<I', iggy_rt_pool(width, aspect))
     path.write_bytes(data)
     return {**profile, 'applied': True, 'boot_sha256_before': before,
             'boot_sha256_after': hashlib.sha256(data).hexdigest()}

@@ -65,9 +65,22 @@ class ResolutionPreparationTests(unittest.TestCase):
         self.assertEqual(sizes['total'], sizes['a'] + sizes['b'] + sizes['c'])
         self.assertEqual(resolution.stack(1920), {**resolution.STACK, 'a+b': 0xb500000, 'total': 0xfe00000})
         self.assertEqual(resolution.dmem_mb(3840), 5056 + resolution.growth(3840) // (1 << 20))
-        resolution.recipe(4192, '16:9')
+        resolution.recipe(4640)
+        resolution.recipe(4000, '16:9')
         with self.assertRaisesRegex(ValueError, 'too large'):
-            resolution.recipe(4880, '16:9')
+            resolution.recipe(4016, '16:9')
+
+    def test_iggy_rendertarget_pool_scales_with_the_scene(self):
+        # Five Iggy targets of the scene's size, like the retail 32 MiB at 1920x800.
+        self.assertEqual(resolution.iggy_rt_pool(1920), 0x2000000)
+        self.assertEqual(resolution.iggy_rt_pool(1280), 0x2000000)
+        self.assertEqual(resolution.iggy_rt_pool(3840), 0x8000000)
+        self.assertEqual(resolution.iggy_rt_pool(2560), 0x3900000)
+        self.assertGreaterEqual(resolution.iggy_rt_pool(3840, '16:9'), 5 * 3840 * 2160 * 4)
+        # the heap carries the larger pool as well as the larger stack
+        stack_only = resolution.stack(3840)['total'] - sum(resolution.STACK.values())
+        self.assertEqual(resolution.growth(3840), stack_only + 0x8000000 - 0x2000000)
+        self.assertEqual(resolution.recipe(3840)['iggy_rendertarget_pool'], '0x8000000')
 
     def test_only_the_recipe_sites_change(self):
         boot = self.base / 'derived.bin'
@@ -92,6 +105,9 @@ class ResolutionPreparationTests(unittest.TestCase):
             allowed |= set(range(start + rva + at, start + rva + at + 4))
         for rva, _, at in resolution.HEAP_SITES:
             self.assertEqual(after[start + rva + at:start + rva + at + 4], struct.pack('<I', resolution.HEAP_SIZE + resolution.growth(3840)))
+            allowed |= set(range(start + rva + at, start + rva + at + 4))
+        for rva, _, at in resolution.IGGY_RT_SITES:
+            self.assertEqual(after[start + rva + at:start + rva + at + 4], struct.pack('<I', 0x8000000))
             allowed |= set(range(start + rva + at, start + rva + at + 4))
         self.assertLessEqual(changed, allowed)
 
