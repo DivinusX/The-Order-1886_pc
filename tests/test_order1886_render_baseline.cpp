@@ -45,6 +45,7 @@ int main() {
     assert(defaults.async_shaders && !defaults.rcas);
     assert(!defaults.deferred_readback && !defaults.stale_readback);
     assert(defaults.fps_limit == 30);
+    assert(defaults.shadows && defaults.temporal_aa); // issue #29: the game's resolve is the baseline
     assert(Ps4Graphics::FsrPassRuns(true, false, 1920, 1080, 3840, 2160));
     assert(!Ps4Graphics::FsrPassRuns(false, false, 1920, 1080, 3840, 2160));
     assert(!Ps4Graphics::FsrPassRuns(true, false, 1920, 1080, 1920, 1080));

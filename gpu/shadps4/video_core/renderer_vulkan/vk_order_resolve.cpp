@@ -11,6 +11,7 @@
 #include <string_view>
 
 #include "ps4_settings.h"
+#include "video_core/host_shaders/order_clean_resolve_comp.h"
 #include "video_core/host_shaders/order_resolve_prep_comp.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_order_resolve.h"
@@ -215,6 +216,106 @@ float Float(std::span<const u32> flatbuf, size_t index) {
     float value;
     std::memcpy(&value, &flatbuf[index], sizeof(value));
     return value;
+}
+
+/// Push constants for order_clean_resolve.comp, whose fields are the prep pass's, without
+/// the velocity and depth terms.
+struct CleanPush {
+    u32 width, height;
+    u32 samples;
+    u32 exposure_from_texture;
+    float log2_exposure;
+};
+
+/// The clean-replace pipeline and its own resolve destination. Compiled once, from the first
+/// resolve it replaces. The result lands in the game's output through a copy, exactly like the
+/// provider path's. There is no history to track here, so dispatches whose images do not match
+/// the frame map fall back per call.
+struct CleanResolve {
+    vk::Device device{};
+    vk::UniqueDescriptorSetLayout set_layout;
+    vk::UniquePipelineLayout layout;
+    vk::UniquePipeline pipeline;
+    std::optional<VideoCore::UniqueImage> image; ///< own resolve destination
+    vk::UniqueImageView view;
+    u32 width = 0, height = 0;
+    u64 frames = 0;
+    u32 skips_logged = 0;
+    bool ready = false;
+
+    bool Create(const Instance& instance) {
+        device = instance.GetDevice();
+        std::array<vk::DescriptorSetLayoutBinding, 3> bindings{};
+        for (u32 i = 0; i < bindings.size(); ++i) {
+            bindings[i] = {.binding = i,
+                           .descriptorType = i == 2 ? vk::DescriptorType::eStorageImage
+                                                    : vk::DescriptorType::eSampledImage,
+                           .descriptorCount = 1,
+                           .stageFlags = vk::ShaderStageFlagBits::eCompute};
+        }
+        set_layout = Check(device.createDescriptorSetLayoutUnique({
+            .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
+            .bindingCount = static_cast<u32>(bindings.size()),
+            .pBindings = bindings.data(),
+        }));
+        const vk::PushConstantRange range{vk::ShaderStageFlagBits::eCompute, 0, sizeof(CleanPush)};
+        layout = Check(device.createPipelineLayoutUnique({
+            .setLayoutCount = 1,
+            .pSetLayouts = &*set_layout,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &range,
+        }));
+        const auto module = CompileSPV(ORDER_CLEAN_RESOLVE_COMP, device);
+        pipeline = Check(device.createComputePipelineUnique(
+            {}, vk::ComputePipelineCreateInfo{
+                    .stage = {.stage = vk::ShaderStageFlagBits::eCompute,
+                              .module = module,
+                              .pName = "main"},
+                    .layout = *layout,
+                }));
+        device.destroyShaderModule(module);
+        std::printf("Temporal AA: the engine's sample resolve replaces the game's temporal one\n");
+        std::fflush(stdout);
+        return true;
+    }
+
+    /// The engine destination for a w x h scene; the caller has waited for the GPU.
+    void Resize(const Instance& instance, u32 w, u32 h) {
+        view.reset();
+        image.emplace(device, instance.GetAllocator());
+        image->Create(vk::ImageCreateInfo{
+            .imageType = vk::ImageType::e2D,
+            .format = vk::Format::eR16G16B16A16Sfloat,
+            .extent = {w, h, 1},
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = vk::SampleCountFlagBits::e1,
+            .usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
+                     vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst,
+            .initialLayout = vk::ImageLayout::eUndefined,
+        });
+        view = Check(device.createImageViewUnique({
+            .image = *image,
+            .viewType = vk::ImageViewType::e2D,
+            .format = vk::Format::eR16G16B16A16Sfloat,
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+        }));
+        width = w;
+        height = h;
+    }
+
+    void Skip(const char* why) {
+        if (skips_logged < 8) {
+            ++skips_logged;
+            std::printf("Temporal AA: game resolve kept (%s)\n", why);
+            std::fflush(stdout);
+        }
+    }
+};
+
+CleanResolve& CleanState() {
+    static CleanResolve state;
+    return state;
 }
 
 } // namespace
@@ -475,6 +576,149 @@ void ReplaceTemporalResolve(Rasterizer& rasterizer, std::span<const VideoCore::I
             std::fflush(stdout);
         }
     });
+}
+
+bool CleanResolveWanted() {
+    // A running provider overwrites the game's result anyway; the toggle only matters when
+    // nothing else replaces the resolve.
+    return !Wanted() && !Ps4Settings::Get().temporal_aa.load(std::memory_order_relaxed);
+}
+
+bool RecordCleanResolve(Rasterizer& rasterizer, std::span<const VideoCore::ImageId> images,
+                        std::span<const u32> flatbuf) {
+    auto& runtime = rasterizer.GetRuntime();
+    auto& texture_cache = rasterizer.GetTextureCache();
+    auto& scheduler = runtime.GetScheduler();
+    const auto& instance = runtime.GetInstance();
+    auto& state = CleanState();
+    if (!state.ready) {
+        if (!state.Create(instance)) {
+            return false;
+        }
+        state.ready = true;
+    }
+
+    VideoCore::ImageId exposure_id{}, color_id{}, output_id{};
+    for (const auto id : images) {
+        const auto& image = texture_cache.GetImage(id);
+        const auto format = image.info.pixel_format;
+        if (format == vk::Format::eR32Sfloat && image.info.size.width == 1) {
+            exposure_id = id;
+        } else if (format == vk::Format::eR16G16B16A16Sfloat && image.info.num_samples > 1) {
+            color_id = id;
+        } else if (format == vk::Format::eR16G16B16A16Sfloat &&
+                   image.backing->state.layout == vk::ImageLayout::eGeneral) {
+            output_id = id; // bound for storage; the history is bound for sampling
+        }
+    }
+    if (!exposure_id || !color_id || !output_id || flatbuf.size() < 66) {
+        state.Skip("resolve images not recognised");
+        return false;
+    }
+    auto& color = texture_cache.GetImage(color_id);
+    auto& exposure = texture_cache.GetImage(exposure_id);
+    auto& output = texture_cache.GetImage(output_id);
+    if (!(output.usage_flags & vk::ImageUsageFlagBits::eTransferDst)) {
+        state.Skip("resolve output cannot receive a copy");
+        return false;
+    }
+    const u32 w = output.info.size.width, h = output.info.size.height;
+    if (color.info.size.width != w || color.info.size.height != h) {
+        state.Skip("scene and resolve output sizes differ");
+        return false;
+    }
+
+    // The game's dispatch is about to run with exactly these bindings - the scene and the
+    // exposure sampled, the output as storage - so the caller's resource binding has already
+    // moved the images to the layouts this needs; these transits only flush the barriers that
+    // make the scene draws' writes visible. The output is prepared as the copy's destination,
+    // like the provider path.
+    runtime.Transit(&color, vk::ImageLayout::eShaderReadOnlyOptimal,
+                    vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderRead);
+    runtime.Transit(&exposure, vk::ImageLayout::eShaderReadOnlyOptimal,
+                    vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderRead);
+    runtime.Transit(&output, vk::ImageLayout::eTransferDstOptimal,
+                    vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite);
+    runtime.FlushBarriers();
+
+    if (w != state.width || h != state.height) {
+        scheduler.Finish(); // the previous destination may still be in use
+        state.Resize(instance, w, h);
+    }
+
+    const auto view = [](VideoCore::Image& image) {
+        VideoCore::ImageViewInfo info{};
+        info.format = image.info.pixel_format;
+        return *image.FindView(info).image_view;
+    };
+    const vk::ImageView color_in = view(color), exposure_in = view(exposure);
+    const CleanPush push{
+        .width = w,
+        .height = h,
+        .samples = color.info.num_samples,
+        .exposure_from_texture = Float(flatbuf, 61) != 0.0f ? 1u : 0u,
+        .log2_exposure = Float(flatbuf, 60),
+    };
+    scheduler.Record([&state, color_in, exposure_in, push, w, h,
+                      game_output = output.GetImage()](vk::CommandBuffer cmdbuf) {
+        const auto compute = vk::PipelineStageFlagBits2::eComputeShader;
+        const auto transfer = vk::PipelineStageFlagBits2::eTransfer;
+        const auto rw = vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite;
+        const vk::Image destination = *state.image;
+        const auto own = [&](vk::ImageLayout from, vk::ImageLayout to,
+                             vk::PipelineStageFlagBits2 src_stage, vk::AccessFlags2 src_access,
+                             vk::PipelineStageFlagBits2 dst_stage, vk::AccessFlags2 dst_access) {
+            const vk::ImageMemoryBarrier2 barrier{
+                .srcStageMask = src_stage,
+                .srcAccessMask = src_access,
+                .dstStageMask = dst_stage,
+                .dstAccessMask = dst_access,
+                .oldLayout = from,
+                .newLayout = to,
+                .image = destination,
+                .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+            };
+            cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier});
+        };
+        own(vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eAllCommands,
+            rw, compute, rw);
+
+        const std::array<vk::DescriptorImageInfo, 3> infos{{
+            {{}, color_in, vk::ImageLayout::eShaderReadOnlyOptimal},
+            {{}, exposure_in, vk::ImageLayout::eShaderReadOnlyOptimal},
+            {{}, *state.view, vk::ImageLayout::eGeneral},
+        }};
+        std::array<vk::WriteDescriptorSet, 3> writes{};
+        for (u32 i = 0; i < writes.size(); ++i) {
+            writes[i] = {.dstBinding = i,
+                         .descriptorCount = 1,
+                         .descriptorType = i == 2 ? vk::DescriptorType::eStorageImage
+                                                  : vk::DescriptorType::eSampledImage,
+                         .pImageInfo = &infos[i]};
+        }
+        cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, *state.pipeline);
+        cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, *state.layout, 0, writes);
+        cmdbuf.pushConstants(*state.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(push),
+                             &push);
+        cmdbuf.dispatch((w + 7) / 8, (h + 7) / 8, 1);
+
+        own(vk::ImageLayout::eGeneral, vk::ImageLayout::eTransferSrcOptimal, compute,
+            vk::AccessFlagBits2::eShaderWrite, transfer, vk::AccessFlagBits2::eTransferRead);
+        const vk::ImageCopy region{
+            .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+            .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+            .extent = {w, h, 1},
+        };
+        cmdbuf.copyImage(destination, vk::ImageLayout::eTransferSrcOptimal, game_output,
+                         vk::ImageLayout::eTransferDstOptimal, region);
+        const u64 count = ++state.frames;
+        if (count == 1 || count % 1800 == 0) {
+            std::printf("Temporal AA: resolved without history for %llu frames (%ux%u, %u samples)\n",
+                        static_cast<unsigned long long>(count), w, h, push.samples);
+            std::fflush(stdout);
+        }
+    });
+    return true;
 }
 
 } // namespace Vulkan

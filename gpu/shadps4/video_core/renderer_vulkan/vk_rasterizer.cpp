@@ -1494,20 +1494,29 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     if (FrameCapture::Active()) {
         FrameCapture::Dispatch(cs.pgm_hash, dim_x, dim_y, dim_z);
     }
-    scheduler.Record([=](vk::CommandBuffer cmdbuf) {
-        if (Scheduler::FullBarriers()) {
-            Scheduler::RecordFullBarrier(cmdbuf);
-        }
-        cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, handle);
-        cmdbuf.dispatch(dim_x, dim_y, dim_z);
-        if (Scheduler::FullBarriers()) {
-            Scheduler::RecordFullBarrier(cmdbuf);
-        }
-    });
+    // Issue #29: "Temporal AA: Off" records the engine's own resolve of the game's samples in
+    // place of the game's dispatch - the game's result would only add the history blur. During
+    // a frame capture the game's dispatch runs as recorded, so frame maps stay faithful.
+    const bool clean_resolve = IsOrderTemporalResolve(cs.pgm_hash) && !FrameCapture::Active() &&
+                               CleanResolveWanted() &&
+                               RecordCleanResolve(*this, std::span{bound_images.data(), bound_images.size()},
+                                                  cs.FlatUserData());
+    if (!clean_resolve) {
+        scheduler.Record([=](vk::CommandBuffer cmdbuf) {
+            if (Scheduler::FullBarriers()) {
+                Scheduler::RecordFullBarrier(cmdbuf);
+            }
+            cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, handle);
+            cmdbuf.dispatch(dim_x, dim_y, dim_z);
+            if (Scheduler::FullBarriers()) {
+                Scheduler::RecordFullBarrier(cmdbuf);
+            }
+        });
+    }
     DebugState.IncDispatch();
     // ponytail: the game's resolve still runs first so its result remains when the provider
     // fails; skip it once the provider path is proven if its cost shows up in the frame time.
-    if (IsOrderTemporalResolve(cs.pgm_hash)) {
+    if (IsOrderTemporalResolve(cs.pgm_hash) && !clean_resolve) {
         ReplaceTemporalResolve(*this, std::span{bound_images.data(), bound_images.size()},
                                cs.FlatUserData());
     }

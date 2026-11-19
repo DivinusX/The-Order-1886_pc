@@ -907,6 +907,12 @@ void ApplyShadows(int index) {
     Ps4Settings::SaveQuality();
 }
 
+void ApplyTemporalAA(int index) {
+    Ps4Settings::Get().temporal_aa = index == 1;
+    MarkCustom();
+    Ps4Settings::SaveQuality();
+}
+
 void ApplyQualityAnisotropy(int index) {
     auto& s = Ps4Settings::Get();
     s.quality_anisotropy = QualityAnisotropies[std::clamp(index, 0, QualityAnisotropyCount - 1)];
@@ -1068,6 +1074,13 @@ std::vector<Row> BuildRows(int tab) {
                     OpenPresetDialog});
     rows.back().badge = "Restart";
     rows.back().badge_tone = 0;
+    rows.push_back({nullptr, "Temporal AA", Kind::Toggle, {"Off", "On"}, s.temporal_aa ? 1 : 0,
+                    true, "Temporal AA",
+                    "On blends the previous frame into the game's multisample resolve: the edges "
+                    "soften and the picture smears at high resolutions. Off resolves the same "
+                    "samples with the game's own weights and no blend, so native-resolution "
+                    "rendering is sharp and only thin edges shimmer. Changes right away.",
+                    "", ApplyTemporalAA});
     rows.push_back({nullptr, "Shadows", Kind::Toggle, {"Off", "On"}, s.shadows ? 1 : 0, true, "Shadows",
                     "Off skips drawing the sun, lamp and torch shadow maps: the scene is lit as if "
                     "nothing cast a shadow. It saves GPU time and CPU time on the GPU thread, which "

@@ -1,0 +1,39 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// The game's temporal resolve without the history blend (issue #29): the same
+// inverse-luminance weighting over the MSAA samples as the game's resolve and the provider
+// prep pass (order_resolve_prep.comp), written straight into the resolve's output image.
+// The game renders without projection jitter (the provider path passes jitter 0,0), so
+// dropping the blend costs the temporal smoothing but keeps the picture stable.
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0) uniform texture2DMS color_tex;
+layout(binding = 1) uniform texture2D exposure_tex; // 1x1 R32F log2 exposure
+layout(binding = 2, rgba16f) uniform writeonly image2D color_out;
+
+layout(push_constant) uniform Constants {
+    uvec2 size;
+    uint samples;
+    uint exposure_from_texture; // resolve constant 61 != 0
+    float log2_exposure;        // resolve constant 60, used unless exposure_from_texture
+};
+
+void main() {
+    const ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(uvec2(p), size))) {
+        return;
+    }
+    const float exposure = exp2(exposure_from_texture != 0u
+                                    ? texelFetch(exposure_tex, ivec2(0), 0).r : log2_exposure);
+    vec3 sum = vec3(0.0);
+    float weight_sum = 0.0;
+    for (int s = 0; s < int(samples); ++s) {
+        const vec3 c = max(texelFetch(color_tex, p, s).rgb, vec3(0.0));
+        const float w = 1.0 / (1.0 + exposure * dot(c, vec3(0.299, 0.587, 0.114)));
+        sum += c * w;
+        weight_sum += w;
+    }
+    imageStore(color_out, p, vec4(sum / max(weight_sum, 1e-5), 1.0));
+}

@@ -370,6 +370,7 @@ void LoadQuality() {
         const std::string key = text.substr(0, eq);
         const int value = std::atoi(text.c_str() + eq + 1);
         if (key == "shadows") v.shadows = value != 0;
+        else if (key == "temporal_aa") v.temporal_aa = value != 0;
         // texture_quality is not offered yet (see PresetRecipe): an older graphics.ini that
         // lowered it is ignored and textures stay at full quality.
         else if (key == "anisotropy") v.quality_anisotropy = std::clamp(value, 0, 16);
@@ -379,8 +380,9 @@ void LoadQuality() {
     }
     std::fclose(file);
     v.quality_generation.fetch_add(1);
-    std::printf("Quality: %s preset, shadows %s, textures %d, anisotropy %d, ultrawide %s, cheats %s (%s)\n",
+    std::printf("Quality: %s preset, shadows %s, temporal %s, textures %d, anisotropy %d, ultrawide %s, cheats %s (%s)\n",
                 QualityPresetName(v.quality_preset), v.shadows ? "on" : "off",
+                v.temporal_aa ? "on" : "off",
                 v.texture_quality.load(), v.quality_anisotropy.load(),
                 v.ultrawide ? (v.ultrawide_available ? "on" : "on, unavailable: 16:9 framing") : "off",
                 v.cheat_mask ? Ps4Cheats::IdsFromMask(v.cheat_mask).c_str() : "none",
@@ -398,8 +400,9 @@ void SaveQuality() {
     }
     std::fprintf(file,
                  "# The Order: 1886 quality settings (in-game menu, F1 > Quality and Mods)\n"
-                 "preset=%d\nshadows=%d\ntexture_quality=%d\nanisotropy=%d\nultrawide=%d\ncheats=%s\n",
-                 v.quality_preset.load(), int(v.shadows.load()), v.texture_quality.load(),
+                 "preset=%d\nshadows=%d\ntemporal_aa=%d\ntexture_quality=%d\nanisotropy=%d\nultrawide=%d\ncheats=%s\n",
+                 v.quality_preset.load(), int(v.shadows.load()), int(v.temporal_aa.load()),
+                 v.texture_quality.load(),
                  v.quality_anisotropy.load(), int(v.ultrawide.load()),
                  Ps4Cheats::IdsFromMask(v.cheat_mask.load()).c_str());
     std::fclose(file);

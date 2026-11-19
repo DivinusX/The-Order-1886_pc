@@ -121,6 +121,11 @@ struct Values {
     /// Off: draws into shadow maps (depth-only, square power-of-two targets) are skipped, the
     /// maps keep their clear, and everything is lit as if unshadowed.
     std::atomic<bool> shadows{true};
+    /// Off: the game's temporal resolve (its MSAA resolve blended with the previous frame, the
+    /// blur in issue #29) is replaced by the engine resolving the same samples without the
+    /// history term, in place of the game's dispatch. The game sends no projection jitter, so
+    /// this costs the temporal smoothing but not stability. Live; graphics.ini.
+    std::atomic<bool> temporal_aa{true};
     /// 0 low, 1 medium, 2 high: mipmapped textures start that many mip levels down.
     std::atomic<int> texture_quality{2};
     /// 0: the launcher's anisotropy (startup_anisotropy); otherwise the menu's 1-16.

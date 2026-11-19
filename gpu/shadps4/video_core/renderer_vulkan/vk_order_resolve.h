@@ -36,4 +36,15 @@ void OnSceneTargets(VideoCore::TextureCache& texture_cache, VideoCore::ImageId c
 void ReplaceTemporalResolve(Rasterizer& rasterizer, std::span<const VideoCore::ImageId> images,
                             std::span<const u32> flatbuf);
 
+/// F1 > Quality "Temporal AA: Off" (issue #29) with no upscaler provider requested: the game's
+/// own samples can be resolved by the engine without the history blend, in place of the game's
+/// dispatch. Read per dispatch, so the menu switches it live.
+[[nodiscard]] bool CleanResolveWanted();
+
+/// Records that engine-side resolve over the game's resolve output, where the game's dispatch
+/// would run. Returns true when recorded - the caller then skips the game's dispatch; false
+/// when the game's resolve must run instead (images not recognised, device cannot compile).
+bool RecordCleanResolve(Rasterizer& rasterizer, std::span<const VideoCore::ImageId> images,
+                        std::span<const u32> flatbuf);
+
 } // namespace Vulkan
