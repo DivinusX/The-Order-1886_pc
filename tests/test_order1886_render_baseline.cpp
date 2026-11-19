@@ -1,4 +1,6 @@
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -9,6 +11,13 @@
 #include "video_core/renderer_vulkan/vk_blend_rewrite.h"
 #include "video_core/amdgpu/ps4_msaa.h"
 #include "video_core/amdgpu/ps4_msaa_default.h"
+
+// ps4_settings.cpp carries the cheat table (graphics.ini cheats=); this test has no game image,
+// so the loader's guarded access reports "not loaded" and nothing ever patches.
+extern "C" int runtime_guest_peek(uint64_t, unsigned char*, size_t) { return -2; }
+extern "C" int runtime_guest_patch(uint64_t, const unsigned char*, const unsigned char*, size_t) {
+    return -2;
+}
 
 using namespace Vulkan;
 static_assert(!CameraMotion::Enabled() && !CameraMotion::Ready());
