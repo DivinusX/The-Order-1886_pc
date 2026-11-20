@@ -5,6 +5,8 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <boost/container/flat_map.hpp>
 #include <queue>
 #include <xbyak/xbyak.h>
@@ -292,8 +294,34 @@ static std::string DescribeOffsetValue(const IR::Value& value, const PassInfo& p
     return description;
 }
 
+// Fallback variants never persist (LoadShaderMeta refuses them), so a shader that fails
+// here recompiles every session, and permutation changes multiply the compiles within one
+// session. A per-compile detail budget therefore reset itself and one failing shader
+// family grew multi-gigabyte boot logs at ~5-6 MB/s while a chapter load was stuck
+// (issue #40). Cap detail lines per shader for the life of the process, announce the cap
+// once, then stay silent.
+constexpr u32 SrtFailureDetailBudget = 64;
+std::mutex g_srt_failure_log_mutex;
+std::unordered_map<u64, u32> g_srt_failure_log_counts;
+
+enum class SrtFailureLogChoice { Log, AnnounceCap, Silent };
+
+static SrtFailureLogChoice TakeSrtFailureLog(u64 pgm_hash) {
+    std::scoped_lock lock{g_srt_failure_log_mutex};
+    u32& count = g_srt_failure_log_counts[pgm_hash];
+    if (count < SrtFailureDetailBudget) {
+        ++count;
+        return SrtFailureLogChoice::Log;
+    }
+    if (count == SrtFailureDetailBudget) {
+        ++count;
+        return SrtFailureLogChoice::AnnounceCap;
+    }
+    return SrtFailureLogChoice::Silent;
+}
+
 static void ReportOffsetFailure(PassInfo& pass_info, const IR::Value& value,
-                                const char* context) {
+                                const char* context, std::string_view companion = {}) {
     // Mark the variant before any early return: the persisted meta must refuse to replay
     // it (a replayed pipeline that binds the flattened layout while the binary reads the
     // canonical tables renders invisible world-prompt glyphs, issue-tracked 17 Nov).
@@ -304,6 +332,18 @@ static void ReportOffsetFailure(PassInfo& pass_info, const IR::Value& value,
     // choose an incoming control-flow value just to let compilation continue.
     if (!pass_info.shader_info || pass_info.offset_failure_details++ >= 32) {
         return;
+    }
+    switch (TakeSrtFailureLog(pass_info.shader_info->pgm_hash)) {
+    case SrtFailureLogChoice::Silent:
+        return;
+    case SrtFailureLogChoice::AnnounceCap:
+        LOG_WARNING(Render_Recompiler,
+                    "SRT offset failures for shader={:#018x}: detail budget of {} lines "
+                    "reached; later failures are suppressed while the fallback persists.",
+                    pass_info.shader_info->pgm_hash, SrtFailureDetailBudget);
+        return;
+    case SrtFailureLogChoice::Log:
+        break;
     }
     // Diagnostic value numbering must not insert canonical instructions into the
     // compiler's live table or otherwise affect the generated walker.
@@ -334,6 +374,9 @@ static void ReportOffsetFailure(PassInfo& pass_info, const IR::Value& value,
     LOG_ERROR(Render_Recompiler, "SRT offset failure: shader={:#018x} stage={} context={} {}",
               pass_info.shader_info->pgm_hash, pass_info.shader_info->hw_stage, context,
               description);
+    if (!companion.empty()) {
+        LOG_ERROR(Render_Recompiler, "{}", companion);
+    }
 }
 
 static bool ComputeOffset(Xbyak::CodeGenerator& c, Xbyak::Reg32 reg, PassInfo& pass_info,
@@ -679,9 +722,9 @@ static bool ComputeOffset(Xbyak::CodeGenerator& c, Xbyak::Reg32 reg, PassInfo& p
         ABORT_ON_FAILURE(EmitComputeOffsetBitFieldUExtract(c, reg, pass_info, inst));
         return true;
     default:
-        ReportOffsetFailure(pass_info, off_dw, "unsupported-opcode");
-        LOG_ERROR(Render_Recompiler, "Unexpected instruction for offset computation, {}",
-                  magic_enum::enum_name(inst->GetOpcode()));
+        ReportOffsetFailure(pass_info, off_dw, "unsupported-opcode",
+                            fmt::format("Unexpected instruction for offset computation, {}",
+                                        magic_enum::enum_name(inst->GetOpcode())));
         return false;
     }
 }
@@ -728,8 +771,8 @@ static void VisitPointer(const IR::Value& off_dw, IR::Inst* subtree, PassInfo& p
     }
 
     if (!PushPtr(c, pass_info, off_dw)) {
-        ReportOffsetFailure(pass_info, off_dw, "pointer-base");
-        LOG_ERROR(Render_Recompiler, "Failed to compute offset for SRT walker");
+        ReportOffsetFailure(pass_info, off_dw, "pointer-base",
+                            "Failed to compute offset for SRT walker");
         return;
     }
     PassInfo::PtrUserList* use_list = pass_info.GetUsesAsPointer(subtree);
@@ -745,8 +788,8 @@ static void VisitPointer(const IR::Value& off_dw, IR::Inst* subtree, PassInfo& p
             c.mov(r10d, ptr[rdi + (src_off_dw.U32() << 2)]);
         } else {
             if (!TryComputeOffset(c, r10d, pass_info, src_off_dw)) {
-                ReportOffsetFailure(pass_info, src_off_dw, "table-element");
-                LOG_ERROR(Render_Recompiler, "Failed to compute offset for SRT walker");
+                ReportOffsetFailure(pass_info, src_off_dw, "table-element",
+                                    "Failed to compute offset for SRT walker");
                 continue;
             }
             c.shl(r10d, 2);

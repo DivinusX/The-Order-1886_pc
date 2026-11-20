@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <mutex>
+#include <unordered_map>
+
 #include "common/logging/classes.h"
 #include "shader_recompiler/frontend/control_flow_graph.h"
 #include "shader_recompiler/frontend/decode.h"
@@ -66,7 +69,25 @@ IR::Program TranslateProgram(const std::span<const u32>& code, Pools& pools, Inf
     // Ensure first instruction is expected.
     constexpr u32 token_mov_vcchi = 0xBEEB03FF;
     if (code[0] != token_mov_vcchi) {
-        LOG_WARNING(Render_Recompiler, "First instruction is not s_mov_b32 vcc_hi, #imm");
+        // Fallback-variant shaders recompile every session, and each compile printed this
+        // warning with no content beyond the shader identity (issue #40). Name the shader
+        // and cap the repeats per shader.
+        static std::mutex mutex;
+        static std::unordered_map<u64, u32> warned;
+        std::scoped_lock lock{mutex};
+        u32& count = warned[info.pgm_hash];
+        if (count < 3) {
+            ++count;
+            LOG_WARNING(Render_Recompiler,
+                        "First instruction is not s_mov_b32 vcc_hi, #imm (shader {:#018x})",
+                        info.pgm_hash);
+        } else if (count == 3) {
+            ++count;
+            LOG_WARNING(Render_Recompiler,
+                        "First instruction is not s_mov_b32 vcc_hi, #imm: shader {:#018x} again; "
+                        "later warnings for it are suppressed",
+                        info.pgm_hash);
+        }
     }
 
     Gcn::GcnCodeSlice slice(code.data(), code.data() + code.size());
