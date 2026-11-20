@@ -54,6 +54,9 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           # Issue #18: the launcher shows the GPU library's stop reason.
           python -m unittest discover -s tests -p test_order1886_failure_detail.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # Issue #40: per-shader session cap on SRT offset-failure lines.
+          python -m unittest discover -s tests -p test_order1886_srt_log_budget.py
       - name: Frontend checks
         working-directory: launcher-go/frontend
         run: |
