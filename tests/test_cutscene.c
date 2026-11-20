@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-/* Lift cutscene hold (#38): when the native 30 FPS is held and when the chosen rate comes back. */
+/* Cutscene hold (#38 lift, #43 drowning struggle): when the native 30 FPS is held and when
+ * the chosen rate comes back. */
 #include "../src/runtime_cutscene.c"
 #include <stdlib.h>
 
@@ -16,6 +17,7 @@ static int failures;
 #define DIALOGUE "/app0/_data/1408209885/ps4/primary/3bf280d756aa4f4e/v1411677946/00000000268ec257"
 #define MIX "/app0/_data/1408209885/ps4/primary/3bf280d756aa4f4e/v1411677946/000000003989d3f9"
 #define OTHER "/app0/_data/1408209885/ps4/primary/3bf280d756aa4f4e/v1411677946/000000003b9483be"
+#define DROWN "/app0/_data/1408209885/ps4/primary/3bf280d756aa4f4e/v1411677946/000000001a473007"
 #define SAVE "/savedata0/SYSTEM.DAT"
 
 int main(void) {
@@ -61,18 +63,30 @@ int main(void) {
     cutscene_open_at(OTHER,320000);
     CHECK(releases==4 && !held);
 
+    /* The drowning struggle after the lift (#43): its bed opens after the checkpoint that
+     * ended the lift hold, holds again, re-arms on each fail-restart open, and ends at the
+     * next checkpoint (10 s rule). */
+    cutscene_open_at(DROWN,340000);
+    CHECK(holds==5 && held);
+    cutscene_open_at(SAVE,341000);
+    CHECK(releases==4 && held);
+    cutscene_open_at(DROWN,350000);
+    CHECK(holds==5);
+    cutscene_open_at(SAVE,361000);
+    CHECK(releases==5 && !held);
+
     /* Similar names elsewhere are not the scene. */
     cutscene_open_at("/app0/other/00000000268ec257",400000);
     cutscene_open_at("/app0/_data/1408209885/ps4/primary/x/00000000268ec2570",400000);
     cutscene_open_at("/savedata0/00000000268ec257/SYSTEM.DAT.bak",400000);
-    CHECK(holds==4 && !held);
+    CHECK(holds==5 && !held);
 
     /* An executable the menu cannot drive: no hold, so no release either. */
     verified=0;
     cutscene_open_at(DIALOGUE,500000);
     CHECK(!held);
     cutscene_open_at(SAVE,520000);
-    CHECK(holds==4 && releases==4);
+    CHECK(holds==5 && releases==5);
 
     cutscene_open_at(NULL,600000);
     if (failures) return 1;

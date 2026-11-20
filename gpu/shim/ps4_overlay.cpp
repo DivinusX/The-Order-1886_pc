@@ -1075,8 +1075,8 @@ std::vector<Row> BuildRows(int tab) {
                    ? "Running uncapped: V-Sync or the GPU sets the limit."
                    : "Running at " + std::to_string(Rates[rate]) + " FPS.";
         if (s.native_rate_held.load()) {
-            note = "Held at 30 FPS during the prologue's lift cutscene, which breaks above 30. "
-                   "Your frame rate comes back when the scene ends.";
+            note = "Held at 30 FPS during the prologue's lift and drowning cutscenes, which break "
+                   "above 30. Your frame rate comes back when the scene ends.";
         }
     }
     rows.push_back({"Frame rate", "Game frame rate", Kind::Choice, labels, rate, global != nullptr,
