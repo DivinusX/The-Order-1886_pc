@@ -396,10 +396,7 @@ void LoadQuality() {
         else if (key == "anisotropy") v.quality_anisotropy = std::clamp(value, 0, 16);
         else if (key == "preset") v.quality_preset = std::clamp(value, 0, int(QualityCustom));
         else if (key == "ultrawide") v.ultrawide = value != 0;
-        else if (key == "cheats") {
-            v.cheat_mask = Ps4Cheats::MaskFromIds(text.substr(eq + 1));
-            v.cheats_explicit = true;
-        }
+        else if (key == "cheats") v.cheat_mask = Ps4Cheats::MaskFromIds(text.substr(eq + 1));
     }
     std::fclose(file);
     v.quality_generation.fetch_add(1);

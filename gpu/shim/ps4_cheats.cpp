@@ -120,25 +120,6 @@ constexpr Edit kOneHitEdits[] = {{0xf01030, kSea73, kOneHitCave, 36},
                                  {0xf01054, kSea73 + 36, kOneHitCave + 36, sizeof(kSea73) - 36},
                                  {0xa1059b, kHealthStore, kOneHitJmp, sizeof(kHealthStore)}};
 
-// QTE button-press fix (issue #43, corrected from the saxons-kicks/theorder1886-port patch
-// "QTE Fix - Button Mash at Any Frame Rate"). In sub_b105b0 each mash press contributes
-// `press value x [entity+0xac]` to the meter, where the press value is 1.0 on the jbe path
-// and 30.0003 on the fall-through path, and [entity+0xac] is the frame time in seconds.
-// So one press counts 30 x dt: 1.0 at 30 FPS, 0.5 at 60, 0.33 at 90 — the mash QTEs
-// (the prologue drowning guard, #101/#33) cannot be finished above 30 FPS.
-// The contributor's single jbe -> jmp patch forces the 1.0 press value but leaves the dt
-// multiply, making each press dt instead of 30 x dt — 30x WEAKER at high frame rates.
-// The complete fix is both sites: the branch (press value becomes 1.0) AND NOP-ing the
-// dt multiply, so every press counts exactly 1.0 — the 30 FPS value — at any frame rate.
-// Sites verified byte-for-byte in the CUSA00785 APP_VER 01.02 image through the production
-// decode path: 76 08 c5 at 0xb106e7, vmulss (c4 c1 7a 59 85 ac 00 00 00) at 0xb10772.
-constexpr unsigned char kQtePressBranch[] = {0x76, 0x08, 0xc5};  // jbe +8; vmulss xmm...
-constexpr unsigned char kQtePressSkip[] = {0xeb, 0x08, 0xc5};    // jmp +8: press value 1.0
-constexpr unsigned char kQteDtMul[] = {0xc4, 0xc1, 0x7a, 0x59, 0x85, 0xac, 0x00, 0x00, 0x00};
-constexpr unsigned char kQteDtNop[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
-constexpr Edit kQteFixEdits[] = {{0xb106e7, kQtePressBranch, kQtePressSkip, sizeof(kQtePressBranch)},
-                                 {0xb10772, kQteDtMul, kQteDtNop, sizeof(kQteDtMul)}};
-
 constexpr Cheat kTable[] = {
     {"unlimited-health", "Infinite health",
      "Damage to the player is ignored: health never falls, while healing still works. "
@@ -156,13 +137,6 @@ constexpr Cheat kTable[] = {
      "Any real damage to a character that is not the player sets its health to zero: one hit "
      "kills. Healing and spawn values pass through untouched, so nothing dies on creation.",
      kOneHitEdits, std::size(kOneHitEdits)},
-    {"qte-button-fix", "QTE button-press fix",
-     "Button-mash quick-time events count every press in full at any frame rate. Without it the "
-     "game shrinks each press by the frame time above 30 FPS, so bars like the prologue drowning "
-     "sequence fall faster than you can press. On by default when the game starts above 30 FPS; "
-     "switching it here is remembered and wins over the default. It does not touch the Chapters "
-     "6 and 9 stuck sequences, which are a different problem.",
-     kQteFixEdits, std::size(kQteFixEdits)},
 };
 
 bool Matches(const unsigned char* found, const unsigned char* bytes, size_t length) {
@@ -173,15 +147,6 @@ bool Matches(const unsigned char* found, const unsigned char* bytes, size_t leng
 
 const Cheat* Table() { return kTable; }
 size_t Count() { return sizeof(kTable) / sizeof(kTable[0]); }
-
-unsigned QteFixBit() {
-    for (size_t i = 0; i < Count(); ++i) {
-        if (std::strcmp(Table()[i].id, "qte-button-fix") == 0) {
-            return 1u << i;
-        }
-    }
-    return 0;
-}
 
 State Of(const Cheat& cheat) {
     unsigned char found[64];

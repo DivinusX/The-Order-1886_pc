@@ -151,10 +151,6 @@ struct Values {
     /// Cheats (issue #24): bit i is Ps4Cheats::Table()[i]. Toggled live in the menu's Mods
     /// section; the selection persists in graphics.ini and is applied again at start.
     std::atomic<unsigned> cheat_mask{0};
-    /// graphics.ini carried a `cheats=` line, so the player (or a saved menu state) named a
-    /// selection — even an empty one. The QTE-fix boot default (issue #43) stands down when
-    /// this is set; it never writes the file itself.
-    std::atomic<bool> cheats_explicit{false};
 };
 
 struct QualityRecipe {

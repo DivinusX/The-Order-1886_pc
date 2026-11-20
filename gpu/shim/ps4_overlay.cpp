@@ -1075,8 +1075,8 @@ std::vector<Row> BuildRows(int tab) {
                    ? "Running uncapped: V-Sync or the GPU sets the limit."
                    : "Running at " + std::to_string(Rates[rate]) + " FPS.";
         if (s.native_rate_held.load()) {
-            note = "Held at 30 FPS during the prologue's lift and drowning cutscenes, which break "
-                   "above 30. Your frame rate comes back when the scene ends.";
+            note = "Held at 30 FPS during the prologue's lift cutscene, which breaks above 30. "
+                   "Your frame rate comes back when the scene ends.";
         }
     }
     rows.push_back({"Frame rate", "Game frame rate", Kind::Choice, labels, rate, global != nullptr,
@@ -1084,9 +1084,7 @@ std::vector<Row> BuildRows(int tab) {
                     "How many frames the game runs per second. Changes right away. 30 FPS is native; "
                     "the rest are experimental: the game clock follows measured time, but some "
                     "quick-time events in Chapters 6 and 9 can get stuck, so go back to 30 there if one "
-                    "does. Button-mash QTEs are not affected: the QTE button-press fix in Mods keeps "
-                    "presses counting full at any rate (on by default above 30 FPS). With V-Sync on, "
-                    "the display's refresh rate is the most you will see.",
+                    "does. With V-Sync on, the display's refresh rate is the most you will see.",
                     note, SetGameFrameRate});
     if (global && rate != 0) {
         rows.back().badge = "Experimental";

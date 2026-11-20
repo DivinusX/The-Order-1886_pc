@@ -13,7 +13,6 @@
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -21,12 +20,6 @@
  * later (a hold that starts there is too late: the camera has already left). */
 #define LIFT_MIX "/000000003989d3f9"
 #define LIFT_DIALOGUE "/00000000268ec257"
-/* The drowning struggle that follows the lift (issue #43): its ambience bed opens right
- * after the lift's checkpoint save releases that hold, and re-opens on every fail-restart.
- * The pressure-point stick/timed-press QTE desyncs the same way above 30 FPS (owner video:
- * black frames with the prompt still up), so it gets the same hold. Captured with
- * ORDER1886_CUTSCENE_TRACE=1 over a scripted New Game replay (harness/trace44.sh). */
-#define DROWN_MIX "/000000001a473007"
 #define CHECKPOINT "/SYSTEM.DAT"
 #define MIN_SCENE_MS 10000
 #define MAX_SCENE_MS 120000
@@ -49,26 +42,17 @@ static int64_t now_ms(void) {
 static void release(const char *why) {
     held=0;
     ps4gpu_hold_native_frame_rate(0);
-    printf("Runtime: cutscene over (%s): back to the chosen frame rate\n",why);
+    printf("Runtime: lift cutscene over (%s): back to the chosen frame rate\n",why);
     fflush(stdout);
 }
 
 static void cutscene_open_at(const char *guest,int64_t now) {
     if (!guest) return;
-    /* ORDER1886_CUTSCENE_TRACE=1: log every sound-mix open so a new scene's trigger
-     * id can be captured from a headless replay (issue #43 drowning struggle hunt). */
-    static int trace=-1;
-    if (trace<0) trace=getenv("ORDER1886_CUTSCENE_TRACE") && *getenv("ORDER1886_CUTSCENE_TRACE")=='1';
-    if (trace && strstr(guest,"/primary/") && strstr(guest,"/00000000")) {
-        printf("Cutscene trace: %s\n",guest);
-        fflush(stdout);
-    }
     pthread_mutex_lock(&lock);
-    if ((ends_with(guest,LIFT_MIX) || ends_with(guest,LIFT_DIALOGUE) || ends_with(guest,DROWN_MIX))
-        && strstr(guest,"/primary/")) {
+    if ((ends_with(guest,LIFT_MIX) || ends_with(guest,LIFT_DIALOGUE)) && strstr(guest,"/primary/")) {
         if (!held && ps4gpu_hold_native_frame_rate(1)) {
             held=1;
-            printf("Runtime: cutscene: holding 30 FPS until it ends (#38, #43)\n");
+            printf("Runtime: lift cutscene: holding 30 FPS until it ends (#38)\n");
             fflush(stdout);
         }
         held_since=now; /* a checkpoint reload replays the scene from the start */
