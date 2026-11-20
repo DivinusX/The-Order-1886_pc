@@ -120,17 +120,24 @@ constexpr Edit kOneHitEdits[] = {{0xf01030, kSea73, kOneHitCave, 36},
                                  {0xf01054, kSea73 + 36, kOneHitCave + 36, sizeof(kSea73) - 36},
                                  {0xa1059b, kHealthStore, kOneHitJmp, sizeof(kHealthStore)}};
 
-// QTE button-press fix (issue #43, ported from the saxons-kicks/theorder1886-port patch
-// "QTE Fix - Button Mash at Any Frame Rate"): in sub_b105b0 each mash press is scaled by the
-// frame time (dt x 30) before it reaches the meter, so at 60 FPS a press counts 0.5 and at
-// 120 FPS a quarter while the meter still drains per second — the prologue drowning QTE
-// (their #101; the same math behind our #33 "need turbo") could not be finished above 30 FPS.
-// jbe -> jmp skips the scaling unconditionally; at 30 FPS the branch is taken already, so the
-// fix changes nothing there. Site verified in the CUSA00785 APP_VER 01.02 image through the
-// production decode path: 0x76 0x08 0xc5 at RVA 0xb106e7.
-constexpr unsigned char kQtePressBranch[] = {0x76, 0x08, 0xc5};  // jbe +8; vmulss xmm0,...
-constexpr unsigned char kQtePressSkip[] = {0xeb, 0x08, 0xc5};    // jmp +8: the press counts 1.0
-constexpr Edit kQteFixEdits[] = {{0xb106e7, kQtePressBranch, kQtePressSkip, sizeof(kQtePressBranch)}};
+// QTE button-press fix (issue #43, corrected from the saxons-kicks/theorder1886-port patch
+// "QTE Fix - Button Mash at Any Frame Rate"). In sub_b105b0 each mash press contributes
+// `press value x [entity+0xac]` to the meter, where the press value is 1.0 on the jbe path
+// and 30.0003 on the fall-through path, and [entity+0xac] is the frame time in seconds.
+// So one press counts 30 x dt: 1.0 at 30 FPS, 0.5 at 60, 0.33 at 90 — the mash QTEs
+// (the prologue drowning guard, #101/#33) cannot be finished above 30 FPS.
+// The contributor's single jbe -> jmp patch forces the 1.0 press value but leaves the dt
+// multiply, making each press dt instead of 30 x dt — 30x WEAKER at high frame rates.
+// The complete fix is both sites: the branch (press value becomes 1.0) AND NOP-ing the
+// dt multiply, so every press counts exactly 1.0 — the 30 FPS value — at any frame rate.
+// Sites verified byte-for-byte in the CUSA00785 APP_VER 01.02 image through the production
+// decode path: 76 08 c5 at 0xb106e7, vmulss (c4 c1 7a 59 85 ac 00 00 00) at 0xb10772.
+constexpr unsigned char kQtePressBranch[] = {0x76, 0x08, 0xc5};  // jbe +8; vmulss xmm...
+constexpr unsigned char kQtePressSkip[] = {0xeb, 0x08, 0xc5};    // jmp +8: press value 1.0
+constexpr unsigned char kQteDtMul[] = {0xc4, 0xc1, 0x7a, 0x59, 0x85, 0xac, 0x00, 0x00, 0x00};
+constexpr unsigned char kQteDtNop[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
+constexpr Edit kQteFixEdits[] = {{0xb106e7, kQtePressBranch, kQtePressSkip, sizeof(kQtePressBranch)},
+                                 {0xb10772, kQteDtMul, kQteDtNop, sizeof(kQteDtMul)}};
 
 constexpr Cheat kTable[] = {
     {"unlimited-health", "Infinite health",
