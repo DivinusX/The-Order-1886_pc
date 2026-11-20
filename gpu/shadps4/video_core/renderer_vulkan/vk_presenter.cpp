@@ -230,7 +230,23 @@ bool ScreenshotToRgba8(const u8* src, u32 width, u32 height, vk::Format format, 
 }
 
 std::filesystem::path ScreenshotPath() {
-    const auto& dir = Common::FS::GetUserPath(Common::FS::PathType::ScreenshotsDir);
+    // Issue #42: a player looks for screenshots in the game's own folder. On a standard
+    // install the user data lives under <game>/user/order1886 (this path may be nested
+    // further, into the GPU cache dir — see where reports land), so captures move to
+    // <game>/Screenshots. Harness and diagnostic layouts have no user/order1886 ancestor
+    // and keep the old location, so test sessions stay isolated.
+    auto dir = Common::FS::GetUserPath(Common::FS::PathType::ScreenshotsDir);
+    static const std::filesystem::path game_root = [&dir] {
+        for (auto p = dir; p.has_relative_path() && p != p.parent_path(); p = p.parent_path()) {
+            if (p.filename() == "order1886" && p.parent_path().filename() == "user") {
+                return p.parent_path().parent_path();
+            }
+        }
+        return std::filesystem::path{};
+    }();
+    if (!game_root.empty()) {
+        dir = game_root / "Screenshots";
+    }
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
     std::string serial{Common::ElfInfo::Instance().GameSerial()};
