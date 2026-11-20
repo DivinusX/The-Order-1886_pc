@@ -1211,13 +1211,14 @@ std::vector<Row> BuildRows(int tab) {
                         ApplySharpening});
     }
     const bool ultrawide_ok = s.ultrawide_available.load();
-    rows.push_back({nullptr, "Ultrawide (21:9)", Kind::Toggle, {"Off", "Fill screen"},
-                    s.ultrawide && ultrawide_ok ? 1 : 0, ultrawide_ok, "Ultrawide (21:9)",
-                    "The game's picture is 2.4:1, the shape of a 21:9 monitor; normally it sits inside a "
-                    "16:9 frame with black bars above and below, and a 21:9 screen then adds bars at the "
-                    "sides too. Fill screen shows only the picture, scaled to the width of the window: "
-                    "no bars on 21:9 displays. Menus, subtitles and prompts stay inside the picture. "
-                    "Changes right away.",
+    rows.push_back({nullptr, "Cinematic picture fills the window", Kind::Toggle, {"Off", "Fill screen"},
+                    s.ultrawide && ultrawide_ok ? 1 : 0, ultrawide_ok, "Cinematic picture fills the window",
+                    "The game's picture is 2.4:1: normally it sits inside a 16:9 frame with black bars "
+                    "above and below. Fill screen shows only the picture, scaled to fit any window "
+                    "shape: nothing left over at 21:9 or 2.4:1, thin bars at 20:9, side bars only at "
+                    "32:9 - the right setting for Sunshine and Moonlight stream resolutions that match "
+                    "no monitor. Menus, subtitles and prompts stay inside the picture. Changes right "
+                    "away.",
                     ultrawide_ok ? std::string()
                                  : std::string("Not available: choose Original framing in the launcher. "
                                                "With 16:9 framing there are no bars to remove."),

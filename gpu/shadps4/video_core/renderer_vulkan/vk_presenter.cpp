@@ -130,9 +130,11 @@ static vk::Rect2D FitImage(s32 frame_width, s32 frame_height, s32 swapchain_widt
                          dst_rect.offset.x, dst_rect.offset.y);
 }
 
-// Ultrawide (Ps4Settings::ultrawide): the game draws a 2.4:1 picture band, centred in a 16:9
-// frame (Original framing; the UI patch keeps menus, subtitles and prompts inside the band).
-// Showing only that band fills a 21:9 display instead of boxing a 16:9 frame inside it.
+// Cinematic band fill (Ps4Settings::ultrawide, issue #45): the game draws a 2.4:1 picture
+// band, centred in a 16:9 frame (Original framing; the UI patch keeps menus, subtitles and
+// prompts inside the band). Showing only that band adapts to ANY window shape - 20:9
+// Sunshine/Moonlight streams, 21:9 monitors, 32:9 - instead of boxing a 16:9 frame inside
+// them; FitImage adds whatever thin bars the exact ratio still needs.
 constexpr float UltrawideBandRatio = 12.0f / 5.0f;
 
 static bool UltrawideActive(float frame_ratio) {
