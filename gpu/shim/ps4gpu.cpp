@@ -361,9 +361,20 @@ extern "C" int ps4gpu_vibration_percent(void) {
 extern "C" void ps4gpu_set_guest_image(void* base, size_t size) {
     Ps4GuestImage::size.store(size, std::memory_order_release);
     Ps4GuestImage::base.store(static_cast<unsigned char*>(base), std::memory_order_release);
+    auto& settings = Ps4Settings::Get();
+    unsigned mask = settings.cheat_mask.load(std::memory_order_relaxed);
+    // Issue #43: the QTE button-press fix defaults on when the image boots above 30 FPS,
+    // unless graphics.ini already names a cheat selection (empty counts as chosen — the
+    // menu wins over the default). The default is not written back; only F1 > Mods saves.
+    const int interval = Ps4GuestImage::BootInterval();
+    if (interval >= 0 && interval != 2 && !settings.cheats_explicit.load(std::memory_order_relaxed)) {
+        mask |= Ps4Cheats::QteFixBit();
+        settings.cheat_mask = mask;
+        std::printf("Cheats: qte-button-fix is on by default above 30 FPS (change it in F1 > Mods).\n");
+    }
     // Cheats saved by the menu's Mods section (issue #24) are re-applied to this image now;
     // sites that do not carry the verified bytes skip themselves and say why.
-    Ps4Cheats::ApplySaved(Ps4Settings::Get().cheat_mask.load(std::memory_order_relaxed));
+    Ps4Cheats::ApplySaved(mask);
 }
 extern "C" int ps4gpu_hold_native_frame_rate(int on) {
     return Ps4Overlay::HoldNativeFrameRate(on != 0) ? 1 : 0;

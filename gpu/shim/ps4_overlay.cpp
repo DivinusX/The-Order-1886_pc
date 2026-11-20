@@ -1084,7 +1084,9 @@ std::vector<Row> BuildRows(int tab) {
                     "How many frames the game runs per second. Changes right away. 30 FPS is native; "
                     "the rest are experimental: the game clock follows measured time, but some "
                     "quick-time events in Chapters 6 and 9 can get stuck, so go back to 30 there if one "
-                    "does. With V-Sync on, the display's refresh rate is the most you will see.",
+                    "does. Button-mash QTEs are not affected: the QTE button-press fix in Mods keeps "
+                    "presses counting full at any rate (on by default above 30 FPS). With V-Sync on, "
+                    "the display's refresh rate is the most you will see.",
                     note, SetGameFrameRate});
     if (global && rate != 0) {
         rows.back().badge = "Experimental";

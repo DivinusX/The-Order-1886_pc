@@ -37,4 +37,22 @@ inline volatile uint32_t* IntervalGlobal() {
     return reinterpret_cast<volatile uint32_t*>(image + IntervalGlobalRva);
 }
 
+/// The interval the loaded image writes at boot (2 = 30 FPS, 1 = 60, 0 = uncapped), or -1
+/// when the image is not the verified executable. The global itself holds no rate before
+/// the guest runs, so the boot default (issue #43) reads the instruction.
+inline int BootInterval() {
+    const unsigned char* const image = base.load(std::memory_order_acquire);
+    const size_t length = size.load(std::memory_order_acquire);
+    if (!image || length < IntervalWriteRva + 10) {
+        return -1;
+    }
+    const unsigned char* instruction = image + IntervalWriteRva;
+    if (std::memcmp(instruction, IntervalWritePrefix, 6) != 0) {
+        return -1;
+    }
+    uint32_t immediate = 0;
+    std::memcpy(&immediate, instruction + 6, 4);
+    return immediate <= 2u ? static_cast<int>(immediate) : -1;
+}
+
 } // namespace Ps4GuestImage

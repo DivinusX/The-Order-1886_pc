@@ -41,6 +41,9 @@ size_t Count();
 unsigned MaskFromIds(const std::string& ids);
 /// The table ids whose bits are set, comma-separated ("" for none).
 std::string IdsFromMask(unsigned mask);
+/// The bit of the QTE button-press fix (issue #43); the boot default turns it on above
+/// 30 FPS unless the player's graphics.ini names a cheat selection.
+unsigned QteFixBit();
 
 enum class State { Off, On, Unknown };
 

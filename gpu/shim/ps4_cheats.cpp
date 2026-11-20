@@ -120,6 +120,18 @@ constexpr Edit kOneHitEdits[] = {{0xf01030, kSea73, kOneHitCave, 36},
                                  {0xf01054, kSea73 + 36, kOneHitCave + 36, sizeof(kSea73) - 36},
                                  {0xa1059b, kHealthStore, kOneHitJmp, sizeof(kHealthStore)}};
 
+// QTE button-press fix (issue #43, ported from the saxons-kicks/theorder1886-port patch
+// "QTE Fix - Button Mash at Any Frame Rate"): in sub_b105b0 each mash press is scaled by the
+// frame time (dt x 30) before it reaches the meter, so at 60 FPS a press counts 0.5 and at
+// 120 FPS a quarter while the meter still drains per second — the prologue drowning QTE
+// (their #101; the same math behind our #33 "need turbo") could not be finished above 30 FPS.
+// jbe -> jmp skips the scaling unconditionally; at 30 FPS the branch is taken already, so the
+// fix changes nothing there. Site verified in the CUSA00785 APP_VER 01.02 image through the
+// production decode path: 0x76 0x08 0xc5 at RVA 0xb106e7.
+constexpr unsigned char kQtePressBranch[] = {0x76, 0x08, 0xc5};  // jbe +8; vmulss xmm0,...
+constexpr unsigned char kQtePressSkip[] = {0xeb, 0x08, 0xc5};    // jmp +8: the press counts 1.0
+constexpr Edit kQteFixEdits[] = {{0xb106e7, kQtePressBranch, kQtePressSkip, sizeof(kQtePressBranch)}};
+
 constexpr Cheat kTable[] = {
     {"unlimited-health", "Infinite health",
      "Damage to the player is ignored: health never falls, while healing still works. "
@@ -137,6 +149,13 @@ constexpr Cheat kTable[] = {
      "Any real damage to a character that is not the player sets its health to zero: one hit "
      "kills. Healing and spawn values pass through untouched, so nothing dies on creation.",
      kOneHitEdits, std::size(kOneHitEdits)},
+    {"qte-button-fix", "QTE button-press fix",
+     "Button-mash quick-time events count every press in full at any frame rate. Without it the "
+     "game shrinks each press by the frame time above 30 FPS, so bars like the prologue drowning "
+     "sequence fall faster than you can press. On by default when the game starts above 30 FPS; "
+     "switching it here is remembered and wins over the default. It does not touch the Chapters "
+     "6 and 9 stuck sequences, which are a different problem.",
+     kQteFixEdits, std::size(kQteFixEdits)},
 };
 
 bool Matches(const unsigned char* found, const unsigned char* bytes, size_t length) {
@@ -147,6 +166,15 @@ bool Matches(const unsigned char* found, const unsigned char* bytes, size_t leng
 
 const Cheat* Table() { return kTable; }
 size_t Count() { return sizeof(kTable) / sizeof(kTable[0]); }
+
+unsigned QteFixBit() {
+    for (size_t i = 0; i < Count(); ++i) {
+        if (std::strcmp(Table()[i].id, "qte-button-fix") == 0) {
+            return 1u << i;
+        }
+    }
+    return 0;
+}
 
 State Of(const Cheat& cheat) {
     unsigned char found[64];
