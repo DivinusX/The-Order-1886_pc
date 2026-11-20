@@ -202,6 +202,7 @@ field("input_remapping", "Stick axes and analog trigger remapping", "controls", 
 field("ui_language", "Launcher language", "system", "select", "en", "Apply the launcher catalog immediately. Game language changes take effect on its next launch when assets are installed.",
       [(key, title, "") for key, title in LANGUAGES.items()])
 field("selected_patches", "Catalogued patches", "game", "patches", [], "Recipes that edit the prepared image are applied on the next preparation, and each one must match this build`s title id, APP_VER, VERSION, image hashes and expected bytes or the preparation refuses it. The 60 FPS and 16:9 recipes are configured by the game frame rate and framing settings instead, so they are not selectable here.")
+field("dlc_dir", "DLC folder", "game", "directory", "", "Folder with extracted DLC (add-on content), such as The Knight's Arsenal and The Knight's Endurance. Select the folder that holds them (each DLC folder contains sce_sys/param.sfo, for example CUSA00035/TO1886GAMEDLC100); DLC from any edition works with any edition of the game. Leave empty to play without DLC. Applies on the next launch.")
 field("mods_dir", "Mods folder", "game", "directory", "", "Mount loose-file overlays without changing original game files.")
 field("mods_enabled", "Enable mods", "game", "boolean", False, "Only enabled folders in the saved order are mounted.")
 field("mod_order", "Enabled mod order", "game", "order", [], "One folder name per line. Later enabled mods take priority; newly discovered mods remain disabled.")

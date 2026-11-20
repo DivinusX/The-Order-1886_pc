@@ -1,9 +1,13 @@
-/* Offline AppContent metadata from the application's param.sfo.
- * No package/DLC mounting, downloads, entitlement or license emulation. */
+/* Offline AppContent metadata from the application's param.sfo, plus extracted add-on content
+ * (DLC folders, #39): each folder with sce_sys/param.sfo is listed as installed and mounted
+ * read-only at /addcontN when the game asks for it. No downloads, licenses or entitlement
+ * checks: what the player points the launcher at is what the game sees. */
 #include "runtime.h"
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #define INVALID_ID ((int32_t)0x805a1000)
 #define NOT_LOADED ((int32_t)0x805a1001)
 #define NOT_INITIALIZED ((int32_t)0x80d90001)
@@ -14,6 +18,12 @@
 static unsigned refs, initialized, configured;
 static uint32_t parameters[5];
 static unsigned queries, lists;
+/* Add-on content found by runtime_content_scan. The entitlement label is the last 16 characters
+ * of the add-on's CONTENT_ID (UP9000-CUSA00035_00-TO1886GAMEDLC100 -> TO1886GAMEDLC100). */
+#define MAX_ADDONS 16
+typedef struct { char label[17]; char title[128]; char host[512]; char point[16]; } Addon;
+static Addon addons[MAX_ADDONS];
+static unsigned addon_count, mounts_made;
 static void stop(const char *message,int status) {
     fputs(message,stderr); fflush(NULL); _Exit(status);
 }
@@ -68,9 +78,67 @@ int runtime_content_configure_sfo(const char *path) {
         runtime_sfo_value(path,key,NULL,0,&values[i]);
     }
     runtime_content_configure(values);
-    printf("Runtime: AppContent SFO %s: SKU=3 (reference compatibility value), user parameters=%u,%u,%u,%u; no add-ons configured\n",
+    printf("Runtime: AppContent SFO %s: SKU=3 (reference compatibility value), user parameters=%u,%u,%u,%u\n",
            title,values[1],values[2],values[3],values[4]);
     return 1;
+}
+static void add_addon(const char *folder) {
+    char sfo[700], content[64]="", category[8]="";
+    if (snprintf(sfo,sizeof(sfo),"%s/sce_sys/param.sfo",folder)>=(int)sizeof(sfo)) return;
+    if (!runtime_sfo_value(sfo,"CONTENT_ID",content,sizeof(content),NULL)) return;
+    runtime_sfo_value(sfo,"CATEGORY",category,sizeof(category),NULL);
+    const size_t n=strlen(content);
+    if (n<16 || (category[0] && strcmp(category,"ac"))) {
+        printf("Runtime: %s is not add-on content (CONTENT_ID %s, CATEGORY %s); skipped\n",folder,content,category);
+        return;
+    }
+    const char *label=content+n-16;
+    for (unsigned i=0;i<addon_count;++i) if (!strcmp(addons[i].label,label)) {
+        printf("Runtime: add-on %s found twice; keeping %s\n",label,addons[i].host);
+        return;
+    }
+    if (addon_count==MAX_ADDONS || strlen(folder)>=sizeof(addons[0].host)) {
+        printf("Runtime: add-on %s skipped (too many add-ons or path too long)\n",label);
+        return;
+    }
+    Addon *a=&addons[addon_count++];
+    memcpy(a->label,label,16); a->label[16]=0;
+    if (!runtime_sfo_value(sfo,"TITLE",a->title,sizeof(a->title),NULL)) snprintf(a->title,sizeof(a->title),"%s",label);
+    snprintf(a->host,sizeof(a->host),"%s",folder);
+    printf("Runtime: add-on %s \"%s\" from %s\n",a->label,a->title,a->host);
+}
+/* A DLC folder: either one extracted add-on (sce_sys/param.sfo directly inside) or a folder of
+ * them, possibly one level deeper (DLC/CUSA00035/TO1886GAMEDLC100). */
+/* Paths longer than an add-on's host field (511 characters) are skipped, never truncated. */
+#define ADDON_PATH 512
+static int join(char *out,const char *a,const char *b) {
+    const int n=snprintf(out,ADDON_PATH,"%s/%s",a,b);
+    return n>0 && n<ADDON_PATH;
+}
+void runtime_content_scan(const char *folder) {
+    if (!folder || !*folder) return;
+    char path[ADDON_PATH], current[ADDON_PATH], child[ADDON_PATH], only[ADDON_PATH];
+    struct stat st;
+    if (strlen(folder)>=ADDON_PATH) { printf("Runtime: add-on folder path is too long; no add-ons\n"); return; }
+    snprintf(current,sizeof(current),"%s",folder);
+    if (join(path,current,"sce_sys/param.sfo") && !stat(path,&st)) { add_addon(current); return; }
+    for (int depth=0;depth<2;++depth) {
+        const unsigned before=addon_count;
+        DIR *d=opendir(current);
+        if (!d) { printf("Runtime: add-on folder %s cannot be read; no add-ons\n",current); return; }
+        unsigned dirs=0; only[0]=0;
+        struct dirent *e;
+        while ((e=readdir(d))) {
+            if (e->d_name[0]=='.' || !join(child,current,e->d_name)) continue;
+            if (stat(child,&st) || !S_ISDIR(st.st_mode)) continue;
+            ++dirs; memcpy(only,child,sizeof(only));
+            if (join(path,child,"sce_sys/param.sfo") && !stat(path,&st)) add_addon(child);
+        }
+        closedir(d);
+        if (addon_count>before || depth==1 || dirs!=1) break;
+        memcpy(current,only,sizeof(current)); /* one wrapper folder (the title ID): look inside it */
+    }
+    if (!addon_count) printf("Runtime: no add-on content found in the DLC folder\n");
 }
 /* System modules: every library this eboot imports is provided by the host
  * runtime, so loading one only tracks a reference count. */
@@ -100,7 +168,7 @@ static ABI int32_t content_init(const unsigned char *init,unsigned char *boot) {
     /* The public init structure contains only reserved bytes. */
     for (unsigned i=0;i<32;++i) if (init[i]) return PARAMETER;
     memset(boot,0,40); initialized=1;
-    puts("Runtime: AppContent initialized from application metadata; no mounted add-ons");
+    printf("Runtime: AppContent initialized from application metadata; %u add-on(s) available\n",addon_count);
     return 0;
 }
 static ABI int32_t param_int(uint32_t id,int32_t *out) {
@@ -109,33 +177,69 @@ static ABI int32_t param_int(uint32_t id,int32_t *out) {
     printf("Runtime: AppContent parameter %u = %d\n",id,*out);
     return 0;
 }
+/* SceAppContentAddcontInfo: entitlement label (17 bytes + 3 padding) and download status. */
+typedef struct { char label[17]; char padding[3]; uint32_t status; } AddcontInfo;
+_Static_assert(sizeof(AddcontInfo)==24,"SceAppContentAddcontInfo layout");
+#define ADDCONT_INSTALLED 4u
+static const Addon *find_addon(const void *label) {
+    const char *text=(const char *)label;
+    for (unsigned i=0;i<addon_count;++i) if (!memcmp(addons[i].label,text,16)) return &addons[i];
+    return NULL;
+}
+/* sceAppContentGetAddcontInfoList: every add-on is installed. Without a list it counts them. */
 static ABI int32_t addon_list(uint32_t service,void *list,uint32_t capacity,uint32_t *hits) {
     (void)service;
     if (!configured) return PARAMETER;
     if ((!capacity || !list) && !hits) return PARAMETER;
-    /* No add-ons are mounted by this provider. Never touch unused list slots. */
-    if (hits) *hits=0;
-    ++lists; return 0;
+    uint32_t listed=addon_count;
+    if (list && capacity) {
+        if (listed>capacity) listed=capacity;
+        AddcontInfo *out=list;
+        for (uint32_t i=0;i<listed;++i) {
+            memset(&out[i],0,sizeof(out[i]));
+            memcpy(out[i].label,addons[i].label,16);
+            out[i].status=ADDCONT_INSTALLED;
+        }
+    }
+    if (hits) *hits=listed;
+    if (!lists++) printf("Runtime: AppContent add-on list: %u add-on(s)\n",addon_count);
+    return 0;
 }
+/* sceAppContentAddcontMount: /addcontN, read-only (runtime_file.c treats /addcont* as game data). */
 static ABI int32_t addon_mount(uint32_t service,const void *label,void *mount_point) {
     (void)service;
     if (!configured || !label || !mount_point) return PARAMETER;
-    return NOT_FOUND;
+    Addon *a=(Addon *)find_addon(label);
+    if (!a) return NOT_FOUND;
+    if (!a->point[0]) {
+        snprintf(a->point,sizeof(a->point),"/addcont%u",mounts_made++);
+        if (runtime_file_mount(a->point,a->host)) { a->point[0]=0; return BUSY; }
+        printf("Runtime: add-on %s mounted at %s\n",a->label,a->point);
+    }
+    memset(mount_point,0,16);
+    memcpy(mount_point,a->point,strlen(a->point));
+    return 0;
 }
+/* sceAppContentGetEntitlementKey: extracted add-ons need no decryption key; a known label gets a
+ * zero key, as the reference implementation returns. */
 static ABI int32_t entitlement_key(uint32_t service,const void *label,void *key) {
     (void)service;
     if (!configured || !label || !key) return PARAMETER;
-    return NO_ENTITLEMENT;
+    if (!find_addon(label)) return NO_ENTITLEMENT;
+    memset(key,0,16);
+    return 0;
 }
-/* sceAppContentAddcontUnmount. Upstream shadPS4 (app_content/app_content.cpp) refuses before
- * initialization, rejects a null mount point, and otherwise unmounts the point and reports
- * success. This provider never mounts add-on content — addon_mount above answers NOT_FOUND for
- * every entitlement — so there is no mount point outstanding to release, and the success the
- * reference returns for an unmounted point is the whole behaviour that can be honoured here. */
+/* sceAppContentAddcontUnmount: releases a mount point made above; an unknown point is a no-op,
+ * as in upstream shadPS4. */
 static ABI int32_t addon_unmount(void *mount_point) {
     if (!initialized) return NOT_INITIALIZED;
     if (!mount_point) return PARAMETER;
-    puts("Runtime: AppContent add-on unmount (this provider mounts no add-on content)");
+    char point[17]; memcpy(point,mount_point,16); point[16]=0;
+    for (unsigned i=0;i<addon_count;++i) if (addons[i].point[0] && !strcmp(addons[i].point,point)) {
+        runtime_file_unmount(point);
+        printf("Runtime: add-on %s unmounted from %s\n",addons[i].label,point);
+        addons[i].point[0]=0;
+    }
     return 0;
 }
 uintptr_t runtime_content_resolve(const char *name) {
@@ -151,5 +255,5 @@ uintptr_t runtime_content_resolve(const char *name) {
     return 0;
 }
 void runtime_content_report(void) {
-    printf("Runtime: AppContent references=%u, initialized=%u, parameter queries=%u, list queries=%u\n",refs,initialized,queries,lists);
+    printf("Runtime: AppContent references=%u, initialized=%u, parameter queries=%u, list queries=%u, add-ons %u (mounted %u)\n",refs,initialized,queries,lists,addon_count,mounts_made);
 }

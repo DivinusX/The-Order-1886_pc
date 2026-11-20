@@ -4,6 +4,7 @@
  * Guest descriptors are small integers in our own table; stdio 0-2 pass through.
  * Paths containing ".." components are rejected rather than normalized. */
 #define _GNU_SOURCE
+#include <stdatomic.h>
 #include "runtime.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,7 +33,7 @@ typedef struct stat HostStat;
 #endif
 #define ERR(n) ((int32_t)(UINT32_C(0x80020000)|(n)))
 #define MAX_FILES 1024
-#define MAX_MOUNTS 16
+#define MAX_MOUNTS 32
 
 typedef struct { int64_t sec, nsec; } GuestTimespec;
 typedef struct { int64_t sec, usec; } GuestTimeval;
@@ -245,7 +246,8 @@ static int game_path(const char *p) {
     if (!p || !*p) return 0;
     if (*p!='/') return 1;
     return (!strncmp(p,"/app0",5) && (!p[5] || p[5]=='/')) ||
-           (!strncmp(p,"/hostapp",8) && (!p[8] || p[8]=='/'));
+           (!strncmp(p,"/hostapp",8) && (!p[8] || p[8]=='/')) ||
+           !strncmp(p,"/addcont",8); /* add-on content (#39) is read-only like the game */
 }
 /* All operations return >=0 or -(host errno); wrappers adapt the convention. */
 static int64_t do_open(const char *guest,int flags,int mode) {
@@ -253,6 +255,11 @@ static int64_t do_open(const char *guest,int flags,int mode) {
     char path[1024];
     int e=translate(guest,path,sizeof(path));
     if (e) return -e;
+    /* Add-on content (#39): the first opens show which DLC files the game reads. */
+    if (guest && !strncmp(guest,"/addcont",8)) {
+        static atomic_uint addon_opens;
+        if (atomic_fetch_add(&addon_opens,1)<32) printf("Runtime: add-on open %s\n",guest);
+    }
 #ifdef _WIN32
     /* Windows cannot open a directory as a CRT descriptor: directories are listings only. */
     (void)mode;

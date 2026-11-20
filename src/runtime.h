@@ -53,6 +53,8 @@ unsigned runtime_sema_waiters(uint32_t id);
 uintptr_t runtime_time_resolve(const char *name);
 void runtime_content_configure(const uint32_t values[5]);
 int runtime_content_configure_sfo(const char *path);
+/* Extracted add-on content (DLC) under folder, mounted on request at /addcontN (#39). */
+void runtime_content_scan(const char *folder);
 int runtime_sfo_value(const char *path,const char *key,char *text,size_t text_size,uint32_t *number);
 uintptr_t runtime_content_resolve(const char *name);
 void runtime_content_report(void);

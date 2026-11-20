@@ -138,6 +138,9 @@ def backend_command(values: dict, mode: str = "play", state: Path = STATE,
         mods.validate_config(mod_root, enabled, order)
         command += ["--mods-dir", str(mod_root), "--mods-enabled", str(int(enabled)),
                     "--mods-order", json.dumps(order, ensure_ascii=False)]
+        dlc = str(values.get("dlc_dir", "") or "").strip()
+        if dlc:
+            command += ["--dlc-dir", dlc]
     if mode == "verify":
         command += ["--check-imports"]
     if stop_file is not None:
@@ -246,6 +249,7 @@ def load_launch_settings(state: Path, saved: dict | None = None) -> dict:
         "game_language": saved.get("game_language", "follow"),
         "automatic_updates": bool(saved.get("automatic_updates", False)),
         "update_channel": saved.get("update_channel", "preview"),
+        "dlc_dir": saved.get("dlc_dir", ""),
         "mods_dir": saved.get("mods_dir", ""),
         "mods_enabled": saved.get("mods_enabled", False),
         "mod_order": saved.get("mod_order", []),

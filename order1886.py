@@ -689,11 +689,29 @@ def write_runtime_config(user, settings):
         + ''.join(f'{k}={v}\n' for k, v in values.items()), encoding='utf-8')
 
 
-def build_command(runtime, image, game, user, check_imports=False):
+def dlc_folders(folder):
+    """Extracted add-on content under folder (#39): each directory holding sce_sys/param.sfo, the
+    folder itself, or the ones one wrapper level down (DLC/CUSA00035/TO1886GAMEDLC100). The runtime
+    reads each param.sfo itself; this list is for the launcher's report."""
+    root = Path(folder)
+    if not str(folder) or not root.is_dir():
+        return []
+    if (root / 'sce_sys' / 'param.sfo').is_file():
+        return [root]
+    found = sorted(child for child in root.iterdir() if (child / 'sce_sys' / 'param.sfo').is_file())
+    children = [child for child in root.iterdir() if child.is_dir()]
+    if not found and len(children) == 1:
+        found = sorted(child for child in children[0].iterdir() if (child / 'sce_sys' / 'param.sfo').is_file())
+    return found
+
+
+def build_command(runtime, image, game, user, check_imports=False, dlc_dir=''):
     command = [str(Path(runtime).resolve()), str(Path(image).resolve()),
                '--app0', str(Path(game).resolve()), '--user', str(Path(user).resolve()), '--timeout', '0']
     if check_imports:
         command.append('--check-imports')
+    elif dlc_dir:
+        command += ['--addcont', str(Path(dlc_dir).resolve())]
     return command
 
 
@@ -852,6 +870,7 @@ def argument_parser():
     parser.add_argument('--keyboard-bindings', default='{}', help='JSON object mapping PS4 digital buttons to SDL key names')
     parser.add_argument('--controller-bindings', default='{}', help='JSON object mapping PS4 digital buttons to SDL gamepad button names')
     parser.add_argument('--mods-dir', default='', help='Folder containing explicitly selected asset mod folders')
+    parser.add_argument('--dlc-dir', default='', help='Folder with extracted add-on content (DLC), mounted at /addcontN (#39)')
     parser.add_argument('--mods-enabled', type=int, choices=[0, 1], default=0)
     parser.add_argument('--mods-order', default='[]', help='JSON list of enabled mod folder names; later entries win')
     parser.add_argument('--button-prompts', choices=prompts.SETS, default='playstation',
@@ -986,13 +1005,21 @@ def main(argv=None):
             mounted_game = mods.build_overlay(game, user, args.mods_dir,
                                              bool(args.mods_enabled) and not args.check_imports, mod_order,
                                              extra=prompt_files)
-            command = build_command(runtime, user / 'prepared/boot-linked.bin', mounted_game, user, args.check_imports)
+            dlc = dlc_folders(args.dlc_dir) if args.dlc_dir else []
+            if args.dlc_dir and not dlc:
+                emit_status(f'DLC folder {args.dlc_dir} holds no extracted add-on content (sce_sys/param.sfo); '
+                            'playing without DLC.', fallback=diagnostic_log)
+            elif dlc:
+                emit_status('DLC: ' + ', '.join(path.name for path in dlc), fallback=diagnostic_log)
+            command = build_command(runtime, user / 'prepared/boot-linked.bin', mounted_game, user, args.check_imports,
+                                    args.dlc_dir if dlc else '')
             timing_values = timing_profile(vars(args))
             report = {'mode': mode, 'started_utc': stamp, **runtime_identity(runtime),
                       'game': str(game), 'mounted_game': str(mounted_game),
                       'button_prompts': args.button_prompts,
                       'mods': {'enabled': bool(args.mods_enabled) and not args.check_imports,
                                'folder': args.mods_dir, 'order': mod_order},
+                      'dlc': {'folder': args.dlc_dir, 'found': [path.name for path in dlc]},
                       'title_id': metadata['TITLE_ID'], 'image_sha256': prepared['image_sha256'],
                       'game_metadata': {key: metadata.get(key) for key in
                                         ('TITLE', 'TITLE_ID', 'APP_VER', 'VERSION', 'INSTALL_DIR_SAVEDATA', 'SYSTEM_VER')},

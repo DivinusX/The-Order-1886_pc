@@ -533,7 +533,7 @@ int main(int argc, char **argv) {
 #endif
     int cpu_only = 0, strict_imports = 0, check_imports = 0;
     unsigned timeout_seconds = 10;
-    const char *app0=NULL, *user_dir=NULL, *patch_file=NULL, *isa_file=NULL;
+    const char *app0=NULL, *user_dir=NULL, *patch_file=NULL, *isa_file=NULL, *addcont=NULL;
     const char *mounts[8]; int mount_count=0;
     for (int i = 2; i < argc; ++i) {
         if (!strcmp(argv[i], "--cpu-only")) cpu_only = 1;
@@ -543,6 +543,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--user") && i+1<argc) user_dir=argv[++i];
         else if (!strcmp(argv[i], "--patches") && i+1<argc) patch_file=argv[++i];
         else if (!strcmp(argv[i], "--isa-rewrite") && i+1<argc) isa_file=argv[++i];
+        else if (!strcmp(argv[i], "--addcont") && i+1<argc) addcont=argv[++i]; /* DLC folder (#39) */
         else if (!strcmp(argv[i], "--mount") && i+1<argc) {
             /* guest=host; the guest part never has '=', so the first one splits */
             const char *spec=argv[++i], *eq=strchr(spec,'=');
@@ -553,7 +554,7 @@ int main(int argc, char **argv) {
         else { fprintf(stderr, "Unknown option: %s\n", argv[i]); return 1; }
     }
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s boot.bin [--cpu-only] [--strict-imports] [--check-imports] [--app0 dir] [--user dir] [--patches file] [--isa-rewrite file] [--mount guest=host]... [--timeout seconds] | --vulkan-only | --cpu-features | --gamepad\n", argv[0]);
+        fprintf(stderr, "Usage: %s boot.bin [--cpu-only] [--strict-imports] [--check-imports] [--app0 dir] [--user dir] [--patches file] [--isa-rewrite file] [--addcont dlc-dir] [--mount guest=host]... [--timeout seconds] | --vulkan-only | --cpu-features | --gamepad\n", argv[0]);
         return 1;
     }
 #ifdef _WIN32
@@ -589,6 +590,7 @@ int main(int argc, char **argv) {
         int length=snprintf(sfo,sizeof(sfo),"%s/sce_sys/param.sfo",app0);
         if (length<0 || (size_t)length>=sizeof(sfo) || !runtime_content_configure_sfo(sfo))
             fail("AppContent requires a valid --app0/sce_sys/param.sfo with TITLE_ID");
+        runtime_content_scan(addcont);
         if (runtime_sfo_value(sfo,"INSTALL_DIR_SAVEDATA",id,sizeof(id),NULL) || runtime_sfo_value(sfo,"TITLE_ID",id,sizeof(id),NULL))
             runtime_savedata_configure(id);
         char trophy_title[16]="";
