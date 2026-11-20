@@ -365,6 +365,9 @@ extern "C" void ps4gpu_set_guest_image(void* base, size_t size) {
     // sites that do not carry the verified bytes skip themselves and say why.
     Ps4Cheats::ApplySaved(Ps4Settings::Get().cheat_mask.load(std::memory_order_relaxed));
 }
+extern "C" int ps4gpu_hold_native_frame_rate(int on) {
+    return Ps4Overlay::HoldNativeFrameRate(on != 0) ? 1 : 0;
+}
 extern "C" int ps4gpu_overlay_captures_input(void) {
     return Ps4Overlay::CapturesInput() ? 1 : 0;
 }

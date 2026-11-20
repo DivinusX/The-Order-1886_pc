@@ -59,6 +59,9 @@ struct Values {
     std::atomic<int> display_mode{0};
     std::atomic<bool> vsync{true};
     std::atomic<int> fps_limit{30};
+    /// A cutscene holds the game at its native 30 FPS (#38): the presentation cap and the
+    /// game's interval follow it; fps_limit keeps the player's choice.
+    std::atomic<bool> native_rate_held{false};
     /// Pipelines compile off the GPU thread; a draw waiting for one is skipped meanwhile
     /// (docs/verification/2026-10-24-async-pipeline-compile.md).
     std::atomic<bool> async_shaders{true};

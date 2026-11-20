@@ -47,7 +47,7 @@ MINGW*|MSYS*)
     done
     echo "Providers built: out/order1886_fsr3.dll out/order1886_fsr4.dll"
     if [[ ${1:-} == --test ]]; then
-        tests=(runtime sema runtime-keys event-flag memory-hooks memory-read-backing memory-ownership memory-output-publication services content
+        tests=(runtime sema runtime-keys event-flag memory-hooks memory-read-backing memory-ownership memory-output-publication services content cutscene
                order-render-baseline srt-descriptor-validation pad pad-map frame-trace
                perf-overlay cheats order-shader-math order-spirv addr64-readconst pipeline-binary-cache
                pipeline-binary-initialization amd-paths mouse-look mp3 videodec
@@ -176,6 +176,8 @@ if [[ ${1:-} == --test ]]; then
     out/sema-test
     "$CC" -std=c11 -D_GNU_SOURCE -O2 -g -Wall -Wextra -Werror -I. -Isrc tests/test_content.c src/runtime_content.c -o out/content-test
     out/content-test
+    "$CC" -std=c11 -D_GNU_SOURCE -O2 -g -Wall -Wextra -Werror -pthread -I. -Isrc tests/test_cutscene.c -o out/cutscene-test
+    out/cutscene-test
     "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread "${includes[@]}" -I. -Isrc tests/test_mp3.c src/runtime_mp3.c out/libatrac9.a -lm "${libraries[@]}" -o out/mp3-test
     out/mp3-test tests/data/sine.mp3
     "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread "${includes[@]}" -I. -Isrc tests/test_videodec.c "${libraries[@]}" -o out/videodec-test

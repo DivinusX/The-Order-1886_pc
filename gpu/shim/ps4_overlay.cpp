@@ -832,14 +832,45 @@ const int OutputChoices[] = {Ps4Settings::OutputAutomatic, 0, 1, 2, 3};
 constexpr int Rates[] = {30, 60, 90, 120, 144, 165, 0};
 constexpr int RateCount = int(sizeof(Rates) / sizeof(Rates[0]));
 
+// The prologue lift cutscene breaks above 30 FPS (#38): the camera leaves the characters behind.
+// While the runtime holds the native rate, the game's interval stays 2 and the presentation cap
+// 30 (driver.cpp); fps_limit and chosen_interval keep the player's choice for afterwards.
+std::mutex hold_mutex;
+u32 held_restore_interval = 2; // the game's own interval when the hold began
+
 void SetGameFrameRate(int index) {
     const int rate = Rates[index];
     const u32 interval = rate == 30 ? 2u : rate == 60 ? 1u : 0u;
+    std::scoped_lock lock{hold_mutex};
     chosen_interval = interval + 1;
+    Ps4Settings::Get().fps_limit = rate;
+    if (Ps4Settings::Get().native_rate_held.load()) {
+        return; // applied when the hold ends
+    }
     if (volatile uint32_t* global = Ps4GuestImage::IntervalGlobal()) {
         *global = interval;
     }
-    Ps4Settings::Get().fps_limit = rate;
+}
+
+bool HoldNativeFrameRate(bool on) {
+    volatile uint32_t* global = Ps4GuestImage::IntervalGlobal();
+    if (!global) {
+        return false;
+    }
+    auto& s = Ps4Settings::Get();
+    std::scoped_lock lock{hold_mutex};
+    if (on) {
+        if (!s.native_rate_held.load()) {
+            held_restore_interval = *global;
+            s.native_rate_held = true;
+        }
+        *global = 2;
+    } else if (s.native_rate_held.load()) {
+        s.native_rate_held = false;
+        const u32 chosen = chosen_interval.load();
+        *global = chosen ? chosen - 1 : held_restore_interval;
+    }
+    return true;
 }
 
 // ---- Quality (shadows, textures, anisotropy, presets) ---------------------------------------
@@ -1043,6 +1074,10 @@ std::vector<Row> BuildRows(int tab) {
                : rate == RateCount - 1
                    ? "Running uncapped: V-Sync or the GPU sets the limit."
                    : "Running at " + std::to_string(Rates[rate]) + " FPS.";
+        if (s.native_rate_held.load()) {
+            note = "Held at 30 FPS during the prologue's lift cutscene, which breaks above 30. "
+                   "Your frame rate comes back when the scene ends.";
+        }
     }
     rows.push_back({"Frame rate", "Game frame rate", Kind::Choice, labels, rate, global != nullptr,
                     "Game frame rate",
@@ -1779,10 +1814,11 @@ void Draw() {
 // Keep the interval the menu chose: the game writes its own at a few scripted moments.
 void EnforceFrameRate() {
     const u32 chosen = chosen_interval.load(std::memory_order_relaxed);
-    if (!chosen) {
+    const bool held = Ps4Settings::Get().native_rate_held.load(std::memory_order_relaxed);
+    if (!chosen && !held) {
         return;
     }
-    const u32 interval = chosen - 1;
+    const u32 interval = held ? 2u : chosen - 1;
     if (volatile uint32_t* global = Ps4GuestImage::IntervalGlobal(); global && *global != interval) {
         *global = interval;
     }
@@ -1791,6 +1827,10 @@ void EnforceFrameRate() {
 } // namespace Menu
 
 } // namespace
+
+bool HoldNativeFrameRate(bool on) {
+    return Menu::HoldNativeFrameRate(on);
+}
 
 void OnPresented(bool loading_frame) {
     const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(

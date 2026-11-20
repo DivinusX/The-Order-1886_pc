@@ -831,7 +831,10 @@ int main(int argc, char **argv) {
      * ps4gpu_init above and the FPS counter reads the image every frame (Ps4GuestImage), but
      * until this point the whole image is PAGE_NOACCESS / PROT_NONE (protect(image, ..., 0))
      * and its segments are still being re-protected. Publishing earlier faulted at startup. */
-    if (gpu_enabled) ps4gpu_set_guest_image(image, size);
+    if (gpu_enabled) {
+        ps4gpu_set_guest_image(image, size);
+        runtime_file_set_open_hook(runtime_cutscene_open); /* lift cutscene at 30 FPS (#38) */
+    }
     printf("Mapped %" PRIu64 " bytes, %" PRIu64 " segments; applied %" PRIu64 " relocations\n", size, ns, nr);
     if (native_libc) {
         for (uint64_t m=0;m<module_count;++m) {

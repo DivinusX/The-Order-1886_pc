@@ -69,6 +69,12 @@ void runtime_file_report(void);
 void runtime_file_configure(const char *app0, const char *user);
 int runtime_file_mount(const char *guest, const char *host);
 void runtime_file_unmount(const char *guest);
+/* Called with every guest path the game opens (NULL: none). */
+typedef void (*RuntimeFileOpenHook)(const char *guest);
+void runtime_file_set_open_hook(RuntimeFileOpenHook hook);
+/* The prologue lift cutscene breaks above 30 FPS (#38): an open hook that holds the native rate
+ * from its dialogue stream to the next checkpoint save. */
+void runtime_cutscene_open(const char *guest);
 int runtime_file_translate(const char *guest, char *out, size_t size);
 int64_t runtime_file_open(const char *path, int flags, int mode);
 int64_t runtime_file_close(int fd);

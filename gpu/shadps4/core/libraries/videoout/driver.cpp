@@ -678,6 +678,10 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
     // With the in-game menu enabled, the limit it edits is live (Ps4Settings::fps_limit);
     // otherwise the launcher's ORDER1886_FPS_LIMIT keeps its fixed value.
     const auto current_limit = [] {
+        // The prologue lift cutscene runs at the native 30 FPS whatever the setting (#38).
+        if (Ps4Settings::Get().native_rate_held.load(std::memory_order_relaxed)) {
+            return 30u;
+        }
         if (Ps4Settings::MenuEnabled()) {
             const int live = Ps4Settings::Get().fps_limit.load();
             // ParseFpsLimit already bounds the file value; clamp here for the menu's own edits.

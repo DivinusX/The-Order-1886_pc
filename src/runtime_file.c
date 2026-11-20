@@ -249,6 +249,8 @@ static int game_path(const char *p) {
            (!strncmp(p,"/hostapp",8) && (!p[8] || p[8]=='/')) ||
            !strncmp(p,"/addcont",8); /* add-on content (#39) is read-only like the game */
 }
+static _Atomic(RuntimeFileOpenHook) open_hook;
+void runtime_file_set_open_hook(RuntimeFileOpenHook hook) { atomic_store(&open_hook,hook); }
 /* All operations return >=0 or -(host errno); wrappers adapt the convention. */
 static int64_t do_open(const char *guest,int flags,int mode) {
     if (game_path(guest) && (flags & (3|0x8|0x200|0x400|0x800))) return -EROFS;
@@ -260,6 +262,8 @@ static int64_t do_open(const char *guest,int flags,int mode) {
         static atomic_uint addon_opens;
         if (atomic_fetch_add(&addon_opens,1)<32) printf("Runtime: add-on open %s\n",guest);
     }
+    RuntimeFileOpenHook hook=atomic_load(&open_hook);
+    if (hook && guest) hook(guest);
 #ifdef _WIN32
     /* Windows cannot open a directory as a CRT descriptor: directories are listings only. */
     (void)mode;

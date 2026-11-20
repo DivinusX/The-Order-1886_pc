@@ -36,6 +36,9 @@ int ps4gpu_choice_begin(const char *title, const char *const *items, const char 
 int ps4gpu_choice_poll(void);
 /* The loaded executable image, for the in-game menu's live frame-rate switch (ps4_guest_image.h). */
 void ps4gpu_set_guest_image(void *base, size_t size);
+/* 1: run the game at its native 30 FPS for now (the prologue lift cutscene, #38); 0: back to the
+ * player's frame rate. Returns 0 when the loaded image is not the verified executable. */
+int ps4gpu_hold_native_frame_rate(int on);
 /* 1 while the in-game settings menu is open: the game's pad input is held neutral. */
 int ps4gpu_overlay_captures_input(void);
 /* Snapshot of window-thread mouse-to-stick input; no SDL calls on the guest thread. */

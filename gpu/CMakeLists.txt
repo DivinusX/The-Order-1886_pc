@@ -223,6 +223,11 @@ if (WIN32)
     target_include_directories(content-test PRIVATE .. ../src)
     target_compile_options(content-test PRIVATE -Wall -Wextra -Werror)
     target_link_libraries(content-test PRIVATE onecore bcrypt -pthread)
+    add_executable(cutscene-test EXCLUDE_FROM_ALL ../tests/test_cutscene.c ../src/compat_win.c)
+    set_target_properties(cutscene-test PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF)
+    target_include_directories(cutscene-test PRIVATE .. ../src)
+    target_compile_options(cutscene-test PRIVATE -Wall -Wextra -Werror)
+    target_link_libraries(cutscene-test PRIVATE onecore bcrypt -pthread)
     # Imports of The Order that no layer answered (audit of the eboot's 355 NIDs).
     add_executable(missing-imports-test EXCLUDE_FROM_ALL ../tests/test_missing_imports.c
         ${PS4_RUNTIME} ../src/compat_win.c)
