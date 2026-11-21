@@ -100,17 +100,24 @@ jobs:
         id: python
         with:
           python-version: '3.13'
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
       # Issue #46: DLSS was selectable but never shipped - the package builder stages the
       # bridge only when its DLLs sit next to the runtime, and no CI step ever built them.
+      # Ninja+MSVC: the runner image carries Build Tools only, which the VS generator cannot
+      # find (first CI attempt failed with "could not find any instance of Visual Studio").
       # MSVC builds the bridge against the hash-pinned official NVIDIA SDK 310.9.16; the
       # CPU contract tests run here, the NGX path needs RTX hardware (reporter-verified).
       - name: Build the DLSS bridge (MSVC, hash-pinned NVIDIA SDK 310.9.16)
         shell: pwsh
         run: |
-          ./gpu/dlss_bridge/build.ps1
-          Copy-Item out/dlss-bridge/Release/order1886_dlss.dll out/
-          Copy-Item out/dlss-bridge/Release/nvngx_dlss.dll out/
-          Copy-Item out/dlss-bridge/Release/NVIDIA-DLSS-LICENSE.txt out/
+          ./gpu/dlss_bridge/build.ps1 -Generator Ninja
+          Copy-Item out/dlss-bridge/order1886_dlss.dll out/ -ErrorAction SilentlyContinue
+          Copy-Item out/dlss-bridge/Release/order1886_dlss.dll out/ -ErrorAction SilentlyContinue
+          Copy-Item out/dlss-bridge/nvngx_dlss.dll out/ -ErrorAction SilentlyContinue
+          Copy-Item out/dlss-bridge/Release/nvngx_dlss.dll out/ -ErrorAction SilentlyContinue
+          Copy-Item out/dlss-bridge/NVIDIA-DLSS-LICENSE.txt out/ -ErrorAction SilentlyContinue
+          Copy-Item out/dlss-bridge/Release/NVIDIA-DLSS-LICENSE.txt out/ -ErrorAction SilentlyContinue
           "DLSS staged: $((Get-Item out/order1886_dlss.dll).Length) + $((Get-Item out/nvngx_dlss.dll).Length) bytes"
       - name: Build the Go portable package and smoke-test it
         shell: pwsh

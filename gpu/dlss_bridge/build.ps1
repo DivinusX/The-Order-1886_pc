@@ -1,4 +1,4 @@
-param([string]$SdkPath, [string]$VulkanInclude)
+param([string]$SdkPath, [string]$VulkanInclude, [string]$Generator = 'Visual Studio 17 2022')
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $deps = Join-Path $repo 'out/deps'
@@ -35,7 +35,7 @@ if (!$VulkanInclude -or !(Test-Path -LiteralPath (Join-Path $VulkanInclude 'vulk
 }
 # MSYS include roots also contain an incompatible C runtime; isolate only Vulkan headers for MSVC.
 $isolated = Join-Path $deps 'vulkan-headers/include'
-New-Item -ItemType Directory -Path $isolated -Force | Out-Null
+New-Item -ItemType Directory -Force -Path $isolated | Out-Null
 foreach ($dir in @('vulkan', 'vk_video')) {
     $from = Join-Path $VulkanInclude $dir
     $to = Join-Path $isolated $dir
@@ -43,13 +43,19 @@ foreach ($dir in @('vulkan', 'vk_video')) {
         Copy-Item -LiteralPath $from -Destination $isolated -Recurse -Force
     }
 }
-& cmake -S $PSScriptRoot -B $build -G 'Visual Studio 17 2022' -A x64 "-DORDER_DLSS_SDK:PATH=$SdkPath" "-DORDER_VULKAN_INCLUDE:PATH=$isolated"
+# GitHub windows-2025 runners carry VS Build Tools only, which the Visual Studio generator
+# does not find; CI passes -Generator Ninja with ilammy/msvc-dev-cmd providing the MSVC env.
+if ($Generator -eq 'Visual Studio 17 2022') {
+    & cmake -S $PSScriptRoot -B $build -G 'Visual Studio 17 2022' -A x64 "-DORDER_DLSS_SDK:PATH=$SdkPath" "-DORDER_VULKAN_INCLUDE:PATH=$isolated"
+} else {
+    & cmake -S $PSScriptRoot -B $build -G $Generator "-DORDER_DLSS_SDK:PATH=$SdkPath" "-DORDER_VULKAN_INCLUDE:PATH=$isolated"
+}
 if ($LASTEXITCODE) { throw 'DLSS configure failed' }
 & cmake --build $build --config Release
 if ($LASTEXITCODE) { throw 'DLSS build failed' }
 & ctest --test-dir $build -C Release --output-on-failure
 if ($LASTEXITCODE) { throw 'DLSS CPU contracts failed' }
-$release = Join-Path $build 'Release'
+$release = if (Test-Path -LiteralPath (Join-Path $build 'Release/order1886_dlss.dll')) { Join-Path $build 'Release' } else { $build }
 Copy-Item -LiteralPath $runtime -Destination $release -Force
 Copy-Item -LiteralPath (Join-Path $SdkPath 'LICENSE.txt') -Destination (Join-Path $release 'NVIDIA-DLSS-LICENSE.txt') -Force
 $files = @('include/nvsdk_ngx_vk.h', 'lib/Windows_x86_64/x64/nvsdk_ngx_s.lib', 'lib/Windows_x86_64/rel/nvngx_dlss.dll', 'LICENSE.txt')
