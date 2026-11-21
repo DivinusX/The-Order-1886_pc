@@ -118,14 +118,6 @@ jobs:
           Copy-Item out/dlss-bridge/Release/nvngx_dlss.dll out/ -ErrorAction SilentlyContinue
           Copy-Item out/dlss-bridge/NVIDIA-DLSS-LICENSE.txt out/ -ErrorAction SilentlyContinue
           Copy-Item out/dlss-bridge/Release/NVIDIA-DLSS-LICENSE.txt out/ -ErrorAction SilentlyContinue
-          # The bridge links the dynamic CRT (NVIDIA's import library demands it); ship the
-          # runtimes so the DLL loads from bin/ on machines without the VC++ redist.
-          $crtBase = Join-Path $env:VCToolsRedistDir 'x64'
-          $crt = (Get-ChildItem -Path $crtBase -Directory -Filter 'Microsoft.VC*.CRT' |
-            Select-Object -First 1).FullName
-          foreach ($dll in 'VCRUNTIME140.dll', 'VCRUNTIME140_1.dll', 'MSVCP140.dll') {
-            Copy-Item (Join-Path $crt $dll) out/ -ErrorAction Stop
-          }
           "DLSS staged: $((Get-Item out/order1886_dlss.dll).Length) + $((Get-Item out/nvngx_dlss.dll).Length) bytes"
       - name: Build the Go portable package and smoke-test it
         shell: pwsh

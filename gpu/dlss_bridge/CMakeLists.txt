@@ -4,9 +4,10 @@ if(NOT WIN32 OR NOT MSVC)
     message(FATAL_ERROR "Build this optional DLL separately with x64 MSVC; the host may use MinGW")
 endif()
 set(CMAKE_CXX_STANDARD 17)
-# NVIDIA's nvsdk_ngx_s.lib is built against the dynamic CRT; a /MT bridge trips
-# LNK2038 RuntimeLibrary mismatches (LNK1319) at the DLL link. Match the import library.
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+# NVIDIA's nvsdk_ngx_s.lib is MT_StaticRelease; the bridge matches it (/MT, release CRT -
+# nothing extra to ship). CI must configure CMAKE_BUILD_TYPE=Release with Ninja: an empty
+# build type makes $<CONFIG:Debug> resolve Debug-side (LNK2038 MDd vs MT_StaticRelease).
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(ORDER_DLSS_SDK "" CACHE PATH "Official NVIDIA DLSS SDK 310.9.16 root (outside tracked sources)")
 find_path(ORDER_VULKAN_INCLUDE vulkan/vulkan.h REQUIRED)
 include(CTest)

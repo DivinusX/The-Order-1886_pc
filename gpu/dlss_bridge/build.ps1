@@ -43,12 +43,15 @@ foreach ($dir in @('vulkan', 'vk_video')) {
         Copy-Item -LiteralPath $from -Destination $isolated -Recurse -Force
     }
 }
-# GitHub windows-2025 runners carry VS Build Tools only, which the Visual Studio generator
-# does not find; CI passes -Generator Ninja with ilammy/msvc-dev-cmd providing the MSVC env.
+# NVIDIA's nvsdk_ngx_s.lib is MT_StaticRelease; the bridge must match it. With Ninja an
+# EMPTY CMAKE_BUILD_TYPE makes $<CONFIG:Debug> behave like Debug (MDd/IDL=2 mismatch), so
+# CI configures Release explicitly. GitHub windows-2025 runners carry VS Build Tools only,
+# invisible to the Visual Studio generator; CI passes -Generator Ninja with
+# ilammy/msvc-dev-cmd providing the MSVC env.
 if ($Generator -eq 'Visual Studio 17 2022') {
     & cmake -S $PSScriptRoot -B $build -G 'Visual Studio 17 2022' -A x64 "-DORDER_DLSS_SDK:PATH=$SdkPath" "-DORDER_VULKAN_INCLUDE:PATH=$isolated"
 } else {
-    & cmake -S $PSScriptRoot -B $build -G $Generator "-DORDER_DLSS_SDK:PATH=$SdkPath" "-DORDER_VULKAN_INCLUDE:PATH=$isolated"
+    & cmake -S $PSScriptRoot -B $build -G $Generator -DCMAKE_BUILD_TYPE=Release "-DORDER_DLSS_SDK:PATH=$SdkPath" "-DORDER_VULKAN_INCLUDE:PATH=$isolated"
 }
 if ($LASTEXITCODE) { throw 'DLSS configure failed' }
 & cmake --build $build --config Release
