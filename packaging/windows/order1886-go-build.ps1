@@ -155,6 +155,12 @@ try {
         $nvidiaLicense = Join-Path $runtimeDir 'NVIDIA-DLSS-LICENSE.txt'
         if (-not (Test-Path -LiteralPath $nvidiaLicense)) { throw 'NVIDIA-DLSS-LICENSE.txt must accompany nvngx_dlss.dll.' }
         $dlss | ForEach-Object { Copy-Item -LiteralPath $_ -Destination $runtimeBin }
+        # /MD bridge (NVIDIA's import library forces the dynamic CRT): ship the runtimes
+        # into bin/ so the DLL loads next to them on machines without the VC++ redist.
+        foreach ($crtDll in 'VCRUNTIME140.dll', 'VCRUNTIME140_1.dll', 'MSVCP140.dll') {
+            $crtSrc = Join-Path $runtimeDir $crtDll
+            if (Test-Path -LiteralPath $crtSrc) { Copy-Item -LiteralPath $crtSrc -Destination $runtimeBin }
+        }
         New-Item -ItemType Directory -Force -Path (Join-Path $destination 'notices') | Out-Null
         Copy-Item -LiteralPath $nvidiaLicense -Destination (Join-Path $destination 'notices/NVIDIA-DLSS-LICENSE.txt')
     }
