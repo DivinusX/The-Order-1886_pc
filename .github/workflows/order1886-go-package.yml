@@ -100,6 +100,18 @@ jobs:
         id: python
         with:
           python-version: '3.13'
+      # Issue #46: DLSS was selectable but never shipped - the package builder stages the
+      # bridge only when its DLLs sit next to the runtime, and no CI step ever built them.
+      # MSVC builds the bridge against the hash-pinned official NVIDIA SDK 310.9.16; the
+      # CPU contract tests run here, the NGX path needs RTX hardware (reporter-verified).
+      - name: Build the DLSS bridge (MSVC, hash-pinned NVIDIA SDK 310.9.16)
+        shell: pwsh
+        run: |
+          ./gpu/dlss_bridge/build.ps1
+          Copy-Item out/dlss-bridge/Release/order1886_dlss.dll out/
+          Copy-Item out/dlss-bridge/Release/nvngx_dlss.dll out/
+          Copy-Item out/dlss-bridge/Release/NVIDIA-DLSS-LICENSE.txt out/
+          "DLSS staged: $((Get-Item out/order1886_dlss.dll).Length) + $((Get-Item out/nvngx_dlss.dll).Length) bytes"
       - name: Build the Go portable package and smoke-test it
         shell: pwsh
         run: |
@@ -119,6 +131,15 @@ jobs:
           $built = Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
           if ($built.update_abi -ne 'order1886-update-2') { throw 'The package does not advertise the update ABI.' }
           if ($built.runtime_build.runtime_abi -ne 'order1886-native-1') { throw 'The package runtime is not an Order build.' }
+          # Issue #46: DLSS is only real when both DLLs and the license actually ship.
+          foreach ($dll in 'order1886_dlss.dll', 'nvngx_dlss.dll') {
+            if (-not (Test-Path -LiteralPath (Join-Path $package.FullName "The Order 1886/bin/$dll"))) {
+              throw "package is missing $dll (DLSS would fall back silently)"
+            }
+          }
+          if (-not (Test-Path -LiteralPath (Join-Path $package.FullName 'The Order 1886/notices/NVIDIA-DLSS-LICENSE.txt'))) {
+            throw 'package is missing the NVIDIA DLSS license notice'
+          }
           "package=$($package.FullName)" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
           'Host/package smoke only. Gameplay, stability and performance remain unverified.' |
             Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
@@ -153,4 +174,5 @@ jobs:
             out/order1886-native-build-and-cpu-tests.log
             out/runtime-build.json
             out/ci-msys2-packages.txt
+            out/dlss-bridge/provenance.json
           if-no-files-found: warn
