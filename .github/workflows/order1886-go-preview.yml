@@ -55,8 +55,16 @@ jobs:
           # Issue #18: the launcher shows the GPU library's stop reason.
           python -m unittest discover -s tests -p test_order1886_failure_detail.py
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          # Issue #40: per-shader session cap on SRT offset-failure lines.
-          python -m unittest discover -s tests -p test_order1886_srt_log_budget.py
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: false
+          pacboy: >-
+            toolchain:p python:p
+      # Compile the C++ fixture with the same Windows toolchain as the package build.
+      - name: SRT log budget regression
+        shell: msys2 {0}
+        run: python -m unittest discover -s tests -p test_order1886_srt_log_budget.py
       - name: Frontend checks
         working-directory: launcher-go/frontend
         run: |

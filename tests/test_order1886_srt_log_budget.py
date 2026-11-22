@@ -101,8 +101,9 @@ class SrtFailureLogBudgetTests(unittest.TestCase):
             cpp = Path(directory) / "ledger.cpp"
             exe = Path(directory) / ("ledger.exe" if os.name == "nt" else "ledger")
             cpp.write_text(fixture, encoding="utf-8")
-            subprocess.run([compiler, "-std=c++23", "-UNDEBUG", "-pthread", str(cpp),
-                            "-o", str(exe)], check=True, capture_output=True, env=environment)
+            build = subprocess.run([compiler, "-std=c++23", "-UNDEBUG", "-pthread", str(cpp),
+                                    "-o", str(exe)], capture_output=True, text=True, env=environment)
+            self.assertEqual(build.returncode, 0, build.stderr)
             result = subprocess.run([str(exe)], capture_output=True, text=True, env=environment)
             self.assertEqual(result.returncode, 0, result.stderr)
 
