@@ -83,6 +83,31 @@ LANGUAGE = {
                'replacement': bytes.fromhex('98fbffff')},),
 }
 
+# Mash QTEs (#43). The upstream #101 branch patch identified the dt * 30 scaling.
+# Instead of making it unconditional, compare dt against the same 33,333 us constant
+# used to initialize this QTE's window. Short frames credit one full press; native
+# and slower frames keep their original scaling. The configured press weight at
+# b10772, meter drain and input-window timing stay intact.
+_QTE_MASH_CONSTANTS = bytes.fromhex('2f88083d 0000803f 000000b5 bd378635 00000034 0000803f 9d00f041')
+QTE_MASH = {
+    'id': 'qte-mash-native-press-weight',
+    'title': 'Button-mash QTE timing',
+    'title_ids': editions.TITLE_IDS,
+    'guest_executable': 'eboot.bin',
+    'image': IMAGE_KIND,
+    'edits': ({
+        # Guard the compare, load of 1.0, conditional branch, and multiply.
+        'offset': 0xb106d7,
+        'expected': bytes.fromhex('c5f82e054dd99200 c5fa100d49d99200 7608 c5fa590d43d99200'),
+        'replacement': bytes.fromhex('c5f82e053dd99200 c5fa100d49d99200 7608 c5fa590d43d99200'),
+    }, {
+        # Guard the existing frame-duration and press-scale constants without changing them.
+        'offset': 0x143e01c,
+        'expected': _QTE_MASH_CONSTANTS,
+        'replacement': _QTE_MASH_CONSTANTS,
+    }),
+}
+
 
 def recipe(identifier):
     """The catalogued recipe with this id; an unknown id is an error, not a default."""
@@ -299,6 +324,17 @@ def apply_language(boot_path, profile, metadata):
     (`reason`), so the session report shows it. The table bytes were verified on APP_VER
     01.02 of the listed editions.
     """
+    return _apply_automatic(boot_path, LANGUAGE, profile, metadata)
+
+
+def apply_qte_mash(boot_path, metadata):
+    """Keep each mash press worth at least its native-frame contribution."""
+    profile = {'id': QTE_MASH['id'], 'recipe_sha256': recipe_sha256(QTE_MASH), 'applied': False,
+               'eligible': identity_error(QTE_MASH, metadata) is None}
+    return _apply_automatic(boot_path, QTE_MASH, profile, metadata)
+
+
+def _apply_automatic(boot_path, recipe, profile, metadata):
     profile = dict(profile)
     if not profile.get('eligible'):
         return {**profile, 'reason': 'the selected edition is not one this recipe was verified on'}
@@ -306,7 +342,7 @@ def apply_language(boot_path, profile, metadata):
     if not path.is_file():
         return {**profile, 'reason': 'no prepared image'}
     try:
-        applied, = apply_to_prepared(path, [LANGUAGE], metadata)
+        applied, = apply_to_prepared(path, [recipe], metadata)
     except ValueError as error:
         return {**profile, 'reason': str(error)}
     return {**profile, 'applied': True, 'edits': applied['edits']}

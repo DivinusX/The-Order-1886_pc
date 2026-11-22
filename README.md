@@ -245,6 +245,9 @@ at 30 FPS in gameplay on an RTX 3070, with drops to 27 FPS (67 ms frames) in the
 
 **60 FPS, 90 FPS and Unlocked are experimental.** The 60 FPS recipe warns of possible
 QTE softlocks in Chapters 6 and 9, and gameplay timing above 60 FPS has not been measured.
+On matching game builds, the port keeps button-mash presses from counting less on short
+frames ([#43](https://github.com/DivinusX/a-port-of-the-order-1886-thats-actually-alive/issues/43)).
+This does not change hold or stick prompts, or the timing of scripted sequences.
 On a 60 Hz display, VSync holds every rate at 60. A host presentation rate or selected cap does not establish
 that the game produces that many new frames. Use the 30 FPS baseline first.
 

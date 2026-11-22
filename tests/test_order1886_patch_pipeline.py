@@ -101,6 +101,31 @@ class PreparedContainerTests(unittest.TestCase):
                 patches.apply_to_prepared(path, (third_party(offset=0x1FF),), METADATA)
             self.assertIn('outside the prepared image', str(caught.exception))
 
+    def test_qte_mash_requires_the_native_frame_duration_before_editing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'boot.bin'
+            compare, constants = 0xb106d7, 0x143e01c
+            instruction = bytes.fromhex('c5f82e054dd99200 c5fa100d49d99200 7608 c5fa590d43d99200')
+            floats = bytes.fromhex('2f88083d 0000803f 000000b5 bd378635 00000034 0000803f 9d00f041')
+            image = bytearray(constants + len(floats))
+            image[compare:compare + len(instruction)] = instruction
+            image[constants:constants + len(floats)] = floats
+            image[constants] ^= 1
+            unrecognized = container(image)
+            path.write_bytes(unrecognized)
+            profile = patches.apply_qte_mash(path, METADATA)
+            self.assertFalse(profile['applied'])
+            self.assertIn(hex(constants), profile['reason'])
+            self.assertEqual(path.read_bytes(), unrecognized)
+
+            image[constants] ^= 1
+            path.write_bytes(container(image))
+            profile = patches.apply_qte_mash(path, METADATA)
+            self.assertTrue(profile['applied'], profile.get('reason'))
+            # The comparison now references the 30 FPS frame duration; the rest is unchanged.
+            image[compare + 4:compare + 8] = (constants - compare - 8).to_bytes(4, 'little')
+            self.assertEqual(path.read_bytes(), container(image))
+
 
 class PreparationPipelineTests(unittest.TestCase):
     def test_the_selection_is_part_of_the_preparation_fingerprint(self):

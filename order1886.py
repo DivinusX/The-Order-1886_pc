@@ -250,7 +250,8 @@ def prepare_game(game, out, frame_rate=30, aspect_ratio='original', patches=(), 
                        post_effects_recipe_sha256=effects_profile['recipe_sha256'],
                        resolution_recipe_sha256=resolution_profile['recipe_sha256'],
                        patches=patch_catalogue.patch_fingerprint(selected_patches),
-                       language_recipe_sha256=language_profile['recipe_sha256'])
+                       language_recipe_sha256=language_profile['recipe_sha256'],
+                       qte_mash_recipe_sha256=patch_catalogue.recipe_sha256(patch_catalogue.QTE_MASH))
     manifest = out / 'prepared.json'
     try:
         previous = json.loads(manifest.read_text(encoding='utf-8'))
@@ -279,6 +280,8 @@ def prepare_game(game, out, frame_rate=30, aspect_ratio='original', patches=(), 
     applied_patches = patch_catalogue.apply_to_prepared(out / 'boot.bin', selected_patches, metadata)
     # The game language reaches the executable unfiltered (SKU 0 jump-table entry); best effort.
     language_profile = patch_catalogue.apply_language(out / 'boot.bin', language_profile, metadata)
+    # Prepare even at 30 FPS: the F1 menu can raise the frame rate without relaunching.
+    qte_mash_profile = patch_catalogue.apply_qte_mash(out / 'boot.bin', metadata)
     link_modules.link(game, out)
     result = {'game': str(game), 'title_id': metadata['TITLE_ID'], 'inputs': fingerprint,
               'frame_rate_profile': profile,
@@ -287,6 +290,7 @@ def prepare_game(game, out, frame_rate=30, aspect_ratio='original', patches=(), 
               'resolution_profile': resolution_profile,
               'catalogue_patches': applied_patches,
               'language_profile': language_profile,
+              'qte_mash_profile': qte_mash_profile,
               'image_sha256': sha256(image), 'status': 'prepared; gameplay unverified'}
     write_json(manifest, result)
     return result
@@ -1031,6 +1035,7 @@ def main(argv=None):
                        'display_profile': prepared.get('display_profile'),
                        'post_effects_profile': prepared.get('post_effects_profile'),
                        'language_profile': prepared.get('language_profile'),
+                       'qte_mash_profile': prepared.get('qte_mash_profile'),
                        'configuration': {
                            'timing': timing_values,
                            'catalogue_patches': prepared.get('catalogue_patches', []),
