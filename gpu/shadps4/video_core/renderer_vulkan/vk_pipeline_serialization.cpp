@@ -33,7 +33,7 @@
 
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
-static constexpr u32 ShaderBinaryVersion = 16u; // GCN NaN rules and exclusive float atomic fallbacks
+static constexpr u32 ShaderBinaryVersion = 17u; // unflattened ReadConst uses the page table
 static constexpr u32 ShaderMetaVersion = 11u; // SRT offset-fallback flag (replay-refused variants)
 static constexpr u32 PipelineKeyVersion = 8u; // explicit inactive/active image specialization state
 } // namespace Serialization

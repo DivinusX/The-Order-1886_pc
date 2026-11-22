@@ -52,3 +52,16 @@ Clean build from `main` (79cb4d0) plus this change, chapter II "Evidence" cutsce
   different instructions, and the attempt made more pixels fail.
 - Other games that redraw with EQUAL are not covered; the bias needs a direction, so EQUAL is left
   unchanged.
+
+## Issue #27: separate shader read fix
+
+Both reported source revisions (`bdd172df` and `aa5dba5f`) already include the 16-unit depth bias.
+The newer patch keeps ordinary `ReadConst` operations without a flat slot or bounded buffer
+binding on the GPU page-table path. It does not change redraw bias or the CPU SRT walker's
+handling of `ReadLane`.
+
+On the development build (`996b3a7dec`), `order-spirv-test` and `addr64-readconst-test` passed with
+DMA disabled. The maintainer saw no face dots in local play on Linux with CUSA00785 and an
+RX 9070 XT. The unpatched run did not reproduce the reported small dots either, and both builds
+logged the same SRT offset failure for shader `0xf5c17eec`. The Windows/NVIDIA reports are not
+verified fixed.

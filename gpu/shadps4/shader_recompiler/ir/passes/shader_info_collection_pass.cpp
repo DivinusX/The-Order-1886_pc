@@ -215,8 +215,9 @@ void CollectShaderInfoPass(IR::Program& program, const Profile& profile) {
     }
 
     if (!EmulatorSettings.IsDirectMemoryAccessEnabled()) {
-        info.uses_dma = false;
-        info.readconst_types = Info::ReadConstType::None;
+        // An unflattened ReadConst has no flat-buffer slot. Keep its page-table lookup.
+        info.readconst_types &= Info::ReadConstType::Dynamic;
+        info.uses_dma = True(info.readconst_types);
     }
 
     if (info.uses_dma) {

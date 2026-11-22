@@ -1162,8 +1162,7 @@ void LowerDynamicReadConstPass(IR::Program& program) {
                     inst.ReplaceUsesWith(ir.Imm32(0));
                     continue;
                 }
-                ASSERT_MSG(EmulatorSettings.IsDirectMemoryAccessEnabled(),
-                           "Unsupported dynamic ReadConst: no bounded uniform base/index");
+                // A computed base or index can still be resolved through the GPU page table.
                 continue;
             }
             u32 binding = 0;

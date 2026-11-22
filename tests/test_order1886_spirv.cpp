@@ -13,8 +13,11 @@
 #include <vector>
 
 #include <spirv/unified1/GLSL.std.450.h>
+#include "core/emulator_settings.h"
 #include "shader_recompiler/backend/spirv/emit_spirv_instructions.h"
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
+#include "shader_recompiler/ir/ir_emitter.h"
+#include "shader_recompiler/ir/passes/ir_passes.h"
 
 namespace {
 using namespace Shader;
@@ -292,6 +295,51 @@ std::vector<u32> CheckAtomicBranches() {
     return code;
 }
 
+void CheckUnflattenedReadConst() {
+    Require(!EmulatorSettings.IsDirectMemoryAccessEnabled(), "Run with DMA disabled");
+    Common::ObjectPool<IR::Inst> pool;
+    IR::Block block{pool};
+    Info info{};
+    info.hw_stage = HwStage::Compute;
+    info.sw_stage = SwStage::Compute;
+    IR::Program program{info};
+    program.post_order_blocks.push_back(&block);
+    IR::IREmitter ir{block};
+    const auto read = ir.ReadConst(ir.CompositeConstruct(ir.LaneId(), ir.Imm32(0)),
+                                   ir.Imm32(7));
+    Profile profile{};
+    profile.supported_spirv = 0x00010600;
+    profile.support_int64 = true;
+    profile.sparse_page_shift = 16;
+    Optimization::LowerDynamicReadConstPass(program);
+    Optimization::CollectShaderInfoPass(program, profile);
+
+    RuntimeInfo runtime{};
+    runtime.Initialize(info.hw_stage, info.sw_stage);
+    Backend::Bindings bindings{};
+    EmitContext ctx{profile, runtime, info, bindings};
+    const auto main = ctx.OpFunction(ctx.void_id, spv::FunctionControlMask::MaskNone,
+                                     ctx.TypeFunction(ctx.void_id));
+    ctx.AddEntryPoint(spv::ExecutionModel::GLCompute, main, "main", ctx.interfaces);
+    ctx.AddExecutionMode(main, spv::ExecutionMode::LocalSize, 1u, 1u, 1u);
+    ctx.AddLabel();
+    const auto base =
+        ctx.OpCompositeConstruct(ctx.U32[2], ctx.u32_zero_value, ctx.u32_zero_value);
+    const auto value = EmitReadConst(ctx, read.Inst(), base, ctx.ConstU32(7u));
+    ctx.OpReturn();
+    ctx.OpFunctionEnd();
+
+    const auto code = ctx.Assemble();
+    for (const auto& inst : Decode(code)) {
+        if (inst.op == spv::Op::OpFunctionCall && inst.words[2] == value.value) {
+            Require(ctx.read_const_dynamic.value != 0 && inst.words[3] == ctx.read_const_dynamic.value,
+                    "Unflattened ReadConst must call the page-table load");
+            return;
+        }
+    }
+    throw std::runtime_error("Unflattened ReadConst emitted a flat-buffer load");
+}
+
 void WriteModule(const std::filesystem::path& path, const std::vector<u32>& code) {
     std::ofstream out(path, std::ios::binary);
     out.write(reinterpret_cast<const char*>(code.data()), code.size() * sizeof(u32));
@@ -307,13 +355,14 @@ int main(int argc, char** argv) {
         const auto atomics = CheckAtomicBranches();
         const auto math = CheckNanMath(false);
         const auto trinary_math = CheckNanMath(true);
+        CheckUnflattenedReadConst();
         if (argc > 1) {
             std::filesystem::create_directories(argv[1]);
             WriteModule(std::filesystem::path(argv[1]) / "order-atomics.spv", atomics);
             WriteModule(std::filesystem::path(argv[1]) / "order-nan-math.spv", math);
             WriteModule(std::filesystem::path(argv[1]) / "order-nan-math-trinary.spv", trinary_math);
         }
-        std::cout << "Order SPIR-V atomic control flow and NaN math passed\n";
+        std::cout << "Order SPIR-V atomic control flow, NaN math, and unflattened ReadConst passed\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
