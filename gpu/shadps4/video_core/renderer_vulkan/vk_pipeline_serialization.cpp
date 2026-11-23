@@ -868,6 +868,9 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
             auto pipeline = std::make_unique<GraphicsPipeline>(
                 instance, scheduler, desc_heap, profile, key, *pipeline_cache, infos,
                 runtime_infos, fetch, modules, sdata, true);
+            if (!pipeline->Handle()) {
+                return false;
+            }
             pipeline->PublishStages(live_infos);
             std::scoped_lock lock{warmup_results_mutex};
             warmup_graphics.emplace_back(key, std::move(pipeline));
@@ -877,6 +880,10 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
         it.value() = std::make_unique<GraphicsPipeline>(
             instance, scheduler, desc_heap, profile, sel.graphics_key, *pipeline_cache, sel.infos,
             sel.runtime_infos, sel.fetch_shader, sel.modules, sdata, true);
+        if (!it.value()->Handle()) {
+            graphics_pipelines.erase(it);
+            return false;
+        }
     }
 
     sel.infos.fill(nullptr);
@@ -1400,6 +1407,9 @@ void PipelineCache::PumpWarmUp() {
                 built.graphics = std::make_unique<GraphicsPipeline>(
                     instance, scheduler, desc_heap, profile, graphics_key, *pipeline_cache, infos,
                     no_runtime_infos, fetch, modules, sdata, true);
+                if (!built.graphics->Handle()) {
+                    return false;
+                }
                 built.graphics->PublishStages(live_infos);
             }
             warm.built.Push(std::move(built));

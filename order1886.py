@@ -176,6 +176,25 @@ def _runtime_sha256(path, size, mtime_ns, file_id):
     return sha256(path)
 
 
+def _shader_cache_abi(runtime):
+    """Bind persistent shader data to the binaries that can emit it."""
+    binaries = [runtime]
+    if os.name != 'nt':
+        # Linux packages launch a shell wrapper; the ELF and GPU library can
+        # change without the wrapper (or its receipt hash) changing.
+        elf = runtime.with_suffix('.bin')
+        binaries = [elf if elf.is_file() else runtime]
+        gpu = runtime.parent / 'gpu' / 'libps4gpu.so'
+        if gpu.is_file():
+            binaries.append(gpu)
+    digest = hashlib.sha256()
+    for path in binaries:
+        status = path.stat()
+        digest.update(bytes.fromhex(_runtime_sha256(
+            str(path), status.st_size, status.st_mtime_ns, status.st_ino)))
+    return f'{SHADER_CACHE_ABI}-{digest.hexdigest()[:24]}'
+
+
 def runtime_identity(runtime):
     runtime = Path(runtime).resolve()
     # The launcher polls state.get, which identifies the 129 MB runtime each time;
@@ -480,7 +499,7 @@ def runtime_environment(runtime, user, settings=None, inherited=None):
     env = runtime_process_environment(runtime, inherited)
     env.update({
         'ORDER1886_CONFIG': str(user / 'runtime.ini'), 'ORDER1886_USER_DIR': str(user),
-        'ORDER1886_GPU_USER_DIR': str(user / 'gpu' / SHADER_CACHE_ABI), 'ORDER1886_GAME_PROFILE': 'order1886',
+        'ORDER1886_GAME_PROFILE': 'order1886',
         'ORDER1886_LANGUAGE': str(system_language),
         'ORDER1886_READBACKS': str({'relaxed': 1, 'selective': 3, 'precise': 2}[readbacks]),
         # Off by default: the HTILE adaptation is unqualified for gameplay, visuals
@@ -498,20 +517,17 @@ def runtime_environment(runtime, user, settings=None, inherited=None):
         'ORDER1886_SETTINGS_MENU': '1' if in_game_menu else '0',
         'ORDER1886_STREAM_MEMORY': 'cached', 'PYTHONIOENCODING': 'utf-8',
     })
-    # Issue #17: keep the pipeline cache in the package (the engine falls back to
-    # the shared per-user directory when this one is missing), adopt any cache a
-    # pre-fix launcher left there, and import a shipped seed bundle so a fresh
-    # install replays pipelines at boot instead of compiling them mid-traversal.
-    # Cache work must never stop a launch, so failures are reported and dropped.
+    # A build with different renderer code must never replay another build's
+    # persistent shader data. Keep older build caches available for rollback.
+    cache_abi = SHADER_CACHE_ABI
     try:
         import order1886_cache as shader_cache
-        # INSTALL_ROOT is the package root: order1886_worker.main() normalises it to
-        # the onedir parent before running the backend, so a shipped seed bundle at
-        # <pkg>/shader-cache/<TITLE_ID>/ is found here. prepare_cache_for_launch also
-        # falls back to state.parent.parent when the root carries no bundle.
-        shader_cache.prepare_cache_for_launch(user, INSTALL_ROOT, log=lambda line: print(line))
-    except Exception as error:  # noqa: BLE001
-        print(f'order1886: shader cache setup skipped: {error}')
+        cache_abi = _shader_cache_abi(runtime)
+        shader_cache.prepare_cache_for_launch(user, INSTALL_ROOT, abi=cache_abi)
+    except (OSError, ValueError) as error:
+        env['ORDER1886_PIPELINE_CACHE'] = '0'
+        print(f'order1886: shader cache disabled for this launch: {error}')
+    env['ORDER1886_GPU_USER_DIR'] = str(user / 'gpu' / cache_abi)
     render_width = resolution.validate_width(settings.get('render_width', resolution.NATIVE_WIDTH))
     if render_width != resolution.NATIVE_WIDTH:
         # The render-target stack and the GPU heap that holds it grow with the frame.
@@ -1027,7 +1043,7 @@ def main(argv=None):
                       'title_id': metadata['TITLE_ID'], 'image_sha256': prepared['image_sha256'],
                       'game_metadata': {key: metadata.get(key) for key in
                                         ('TITLE', 'TITLE_ID', 'APP_VER', 'VERSION', 'INSTALL_DIR_SAVEDATA', 'SYSTEM_VER')},
-                      'shader_cache_abi': SHADER_CACHE_ABI,
+                      'shader_cache_abi': Path(env['ORDER1886_GPU_USER_DIR']).name,
                       'log': str(log), 'status': 'running', 'gameplay_verified': False,
                       'command': command, 'config_sha256': sha256(user / 'runtime.ini'),
                       'runtime_environment': {k: v for k, v in env.items() if k.startswith('ORDER1886_')},

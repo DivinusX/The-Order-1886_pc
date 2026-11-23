@@ -74,6 +74,12 @@ _OTHER_FAULT = """Host fault (signal 11) in bin/gpu/libps4gpu.so+0x1234 (?), add
   #3 bin/order1886-runtime.bin+0x9b96 (main)
 """
 
+_WINDOWS_REPLAY_FAILURE = """GPU [Debug] <Critical> GraphicsPipeline: Assertion Failed!
+Failed to create graphics pipeline: ErrorInitializationFailed
+STOP: GPU library assertion failed (see GPU log above)
+"""
+
+
 
 class CrashQuarantineTests(unittest.TestCase):
     def setUp(self):
@@ -86,11 +92,12 @@ class CrashQuarantineTests(unittest.TestCase):
         (self.cache / 'profile.bin').write_bytes(b'device')
         (self.cache / 'g_0x1.key').write_bytes(b'key')
 
-    def _last_run(self, log_text, status='failed', started='20261117T065753.878866Z'):
+    def _last_run(self, log_text, status='failed', started='20261117T065753.878866Z',
+                  exit_code=139, abi='native-ps4-v1'):
         log = self.state / 'logs' / f'{started}-boot.log'
         log.write_text(log_text, encoding='utf-8')
-        report = {'status': status, 'exit_code': 139, 'log': str(log), 'title_id': 'CUSA00035',
-                  'shader_cache_abi': 'native-ps4-v1', 'started_utc': started}
+        report = {'status': status, 'exit_code': exit_code, 'log': str(log), 'title_id': 'CUSA00035',
+                  'shader_cache_abi': abi, 'started_utc': started}
         (self.state / 'logs' / 'last-run.json').write_text(json.dumps(report), encoding='utf-8')
 
     def test_warmup_crash_moves_the_cache_aside_once(self):
@@ -103,6 +110,30 @@ class CrashQuarantineTests(unittest.TestCase):
         (self.cache / 'fresh.key').write_bytes(b'new')
         self.assertIsNone(cache.quarantine_crashed_cache(self.state, log=lambda *_: None))
         self.assertTrue((self.cache / 'fresh.key').exists())
+
+    def test_windows_startup_assertion_only_retires_the_affected_build(self):
+        old = 'native-ps4-v1-' + 'a' * 24
+        new = 'native-ps4-v1-' + 'b' * 24
+        old_cache = cache.title_cache_dir(self.state, 'CUSA00035', old)
+        new_cache = cache.title_cache_dir(self.state, 'CUSA00035', new)
+        old_cache.mkdir(parents=True)
+        new_cache.mkdir(parents=True)
+        (old_cache / 'profile.bin').write_bytes(b'old profile')
+        (new_cache / 'profile.bin').write_bytes(b'new profile')
+        self._last_run(_WINDOWS_REPLAY_FAILURE, exit_code=23, abi=old)
+        cache.prepare_cache_for_launch(self.state, abi=new, log=lambda *_: None)
+        self.assertEqual((old_cache / 'profile.bin').read_bytes(), b'old profile')
+        self.assertEqual((new_cache / 'profile.bin').read_bytes(), b'new profile')
+        moved = cache.quarantine_crashed_cache(self.state, abi=old, log=lambda *_: None)
+        self.assertEqual((moved / 'profile.bin').read_bytes(), b'old profile')
+        self.assertFalse(old_cache.exists())
+        self.assertEqual((self.cache / 'g_0x1.key').read_bytes(), b'key')
+
+    def test_live_graphics_assertion_does_not_retire_the_cache(self):
+        ready = 'GPU: window and Vulkan presenter ready; SDK 0x12345678\n'
+        self._last_run(ready + _WINDOWS_REPLAY_FAILURE, exit_code=23)
+        self.assertIsNone(cache.quarantine_crashed_cache(self.state))
+        self.assertEqual((self.cache / 'g_0x1.key').read_bytes(), b'key')
 
     def test_a_newer_crash_replaces_the_older_quarantine(self):
         self._last_run(_WARMUP_FAULT, started='20261117T010000Z')
@@ -183,6 +214,21 @@ class SeedImportTests(unittest.TestCase):
         self.assertEqual(receipts[0]['imported'], 3)  # keys, spv, profile
         self.assertEqual(
             (cache.title_cache_dir(fresh, 'CUSA00035') / 'g_0x1.key').read_bytes(), b'key')
+
+    def test_seed_from_another_build_is_not_replayed(self):
+        old = 'native-ps4-v1-' + 'a' * 24
+        new = 'native-ps4-v1-' + 'b' * 24
+        capture = cache.title_cache_dir(self.state, 'CUSA00035', old)
+        capture.mkdir(parents=True)
+        (capture / 'g_0x1.key').write_bytes(b'key')
+        cache.export_shader_cache_seed(capture, self.install / 'shader-cache' / 'CUSA00035',
+                                       'CUSA00035', log=lambda *_: None)
+        cache.prepare_cache_for_launch(self.state, self.install, abi=new, log=lambda *_: None)
+        self.assertFalse(cache.title_cache_dir(self.state, 'CUSA00035', new).exists())
+        fresh = self.install / 'pkg2' / 'user' / 'order1886'
+        cache.prepare_cache_for_launch(fresh, self.install, abi=old, log=lambda *_: None)
+        self.assertEqual((cache.title_cache_dir(fresh, 'CUSA00035', old) /
+                          'g_0x1.key').read_bytes(), b'key')
 
     def test_prepare_survives_a_broken_seed(self):
         bundle = _seed_bundle(self.install)

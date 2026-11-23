@@ -251,6 +251,11 @@ This does not change hold or stick prompts, or the timing of scripted sequences.
 On a 60 Hz display, VSync holds every rate at 60. A host presentation rate or selected cap does not establish
 that the game produces that many new frames. Use the 30 FPS baseline first.
 
+Shader caches are reused only with the same runtime and renderer binaries. After an
+update, the first launch builds a new cache; earlier caches stay available for rollback.
+Save data and settings are not part of the shader cache.
+See [issue #54](https://github.com/DivinusX/a-port-of-the-order-1886-thats-actually-alive/issues/54).
+
 ## Known problems and reporting
 
 | Problem | What to do |

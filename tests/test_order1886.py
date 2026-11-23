@@ -118,6 +118,8 @@ class OrderBackendTests(unittest.TestCase):
                      'ORDER1886_USER_DIR': 'obsolete-save-directory'}
         before = dict(inherited)
         runtime = self.base / 'runtime binaries' / 'probe.exe'
+        runtime.parent.mkdir()
+        runtime.write_bytes(b'runtime fixture')
         env = order1886.runtime_environment(runtime, self.user, inherited=inherited)
         self.assertEqual(inherited, before)
         self.assertNotIn('ORDER1886_PATCHES', env)
@@ -127,7 +129,9 @@ class OrderBackendTests(unittest.TestCase):
         self.assertEqual(env['ORDER1886_FATAL_DUMP'], '1')
         self.assertEqual(env['ORDER1886_GAME_PROFILE'], 'order1886')
         self.assertEqual(env['ORDER1886_USER_DIR'], str(self.user.resolve()))
-        self.assertEqual(env['ORDER1886_GPU_USER_DIR'], str(self.user.resolve() / 'gpu' / order1886.SHADER_CACHE_ABI))
+        gpu_home = Path(env['ORDER1886_GPU_USER_DIR'])
+        self.assertEqual(gpu_home.parent, self.user.resolve() / 'gpu')
+        self.assertTrue((gpu_home / 'cache').is_dir())
         self.assertEqual(env['ORDER1886_CONFIG'], str(self.user.resolve() / 'runtime.ini'))
         for retired in ('UPSCALER', 'OBJECT_MOTION', 'OBJECT_MOTION_ALL', 'SQUARE_PASS',
                         'JITTER', 'REACTIVE', 'STALE_READBACK'):
@@ -135,6 +139,49 @@ class OrderBackendTests(unittest.TestCase):
         self.assertEqual(env['ORDER1886_FPS_LIMIT'], '30')
         self.assertEqual(env['ORDER1886_PREP_WORKERS'], '0')
         self.assertEqual(env['PATH'], str(runtime.parent.resolve()) + os.pathsep + 'original-path')
+
+    def test_build_update_uses_a_fresh_cache_and_rollback_reuses_the_old_one(self):
+        runtime = self.base / 'order1886-runtime'
+        a, b = b'build A', b'different build B'
+        legacy = self.user / 'gpu' / order1886.SHADER_CACHE_ABI / 'cache'
+        legacy.mkdir(parents=True)
+        (legacy / 'legacy.bin').write_bytes(b'incompatible shader')
+        save = self.user / 'savedata' / 'checkpoint'
+        save.parent.mkdir()
+        save.write_bytes(b'progress')
+
+        def start(content):
+            runtime.write_bytes(content)
+            env = order1886.runtime_environment(runtime, self.user)
+            self.assertNotIn('ORDER1886_PIPELINE_CACHE', env)
+            return Path(env['ORDER1886_GPU_USER_DIR']) / 'cache'
+
+        first = start(a)
+        self.assertNotEqual(first, legacy)
+        (first / 'shader.key').write_bytes(a)
+        self.assertEqual((start(a) / 'shader.key').read_bytes(), a)
+
+        second = start(b)
+        self.assertNotEqual(second, first)
+        self.assertEqual(list(second.iterdir()), [])
+        (second / 'shader.key').write_bytes(b)
+        self.assertEqual((start(b) / 'shader.key').read_bytes(), b)
+        self.assertEqual((start(a) / 'shader.key').read_bytes(), a)
+        self.assertEqual((legacy / 'legacy.bin').read_bytes(), b'incompatible shader')
+        self.assertEqual(save.read_bytes(), b'progress')
+
+    @unittest.skipIf(os.name == 'nt', 'Windows links the renderer into the executable')
+    def test_linux_gpu_library_changes_the_cache_with_an_unchanged_wrapper(self):
+        runtime = self.base / 'order1886-runtime'
+        runtime.write_bytes(b'unchanged wrapper')
+        runtime.with_suffix('.bin').write_bytes(b'unchanged ELF')
+        gpu = self.base / 'gpu' / 'libps4gpu.so'
+        gpu.parent.mkdir()
+        gpu.write_bytes(b'old GPU library')
+        first = order1886.runtime_environment(runtime, self.user)['ORDER1886_GPU_USER_DIR']
+        gpu.write_bytes(b'new GPU library')
+        second = order1886.runtime_environment(runtime, self.user)['ORDER1886_GPU_USER_DIR']
+        self.assertNotEqual(first, second)
 
     def test_frame_rate_host_cap_and_config_match_without_changing_vblank(self):
         for rate in (30, 60):

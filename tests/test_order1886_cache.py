@@ -96,6 +96,23 @@ class ShaderCacheTests(unittest.TestCase):
         with patch.object(self.cache_module.shutil, 'rmtree', side_effect=checked_remove):
             self.assertTrue(self.clear())
 
+    def test_manual_clear_removes_build_caches_but_not_unrelated_gpu_data(self):
+        gpu = self.state / 'gpu'
+        abi = order1886.SHADER_CACHE_ABI
+        for key in ('a' * 24, 'b' * 24, 'custom'):
+            home = gpu / f'{abi}-{key}'
+            cache = home / 'cache' / order1886.TITLE_ID
+            cache.mkdir(parents=True)
+            (cache / 'shader.bin').write_bytes(b'shader')
+            (home / 'screenshot.png').write_bytes(b'image')
+        self.assertTrue(self.clear())
+        for key in ('a' * 24, 'b' * 24):
+            home = gpu / f'{abi}-{key}'
+            self.assertFalse((home / 'cache' / order1886.TITLE_ID).exists())
+            self.assertEqual((home / 'screenshot.png').read_bytes(), b'image')
+        self.assertTrue((gpu / f'{abi}-custom' / 'cache' / order1886.TITLE_ID /
+                         'shader.bin').is_file())
+
     def test_redirected_state_refuses_and_preserves_cache(self):
         alias = self.root / 'state-link'
         self.link_directory(alias, self.state)

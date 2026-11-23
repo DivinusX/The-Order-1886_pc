@@ -51,10 +51,19 @@ def clear_shader_cache(state: Path) -> bool:
         return False
     _check_ancestors(state / 'session.lock')
     with order1886.session_lock(state):
-        # The runtime keys the cache by the running edition's TITLE_ID; clear every edition's.
+        # Clear every known edition in the legacy cache and in every build cache.
+        gpu = state / 'gpu'
+        _check_ancestors(gpu)
+        abi = order1886.SHADER_CACHE_ABI
+        homes = [gpu / abi]
+        for home in gpu.glob(f'{abi}-*'):
+            suffix = home.name[len(abi) + 1:]
+            if len(suffix) == 24 and all(ch in '0123456789abcdef' for ch in suffix):
+                homes.append(home)
         removed = False
-        for title_id in order1886.editions.TITLE_IDS:
-            removed |= _clear(state, state / 'gpu' / order1886.SHADER_CACHE_ABI / 'cache' / title_id)
+        for home in homes:
+            for title_id in order1886.editions.TITLE_IDS:
+                removed |= _clear(state, home / 'cache' / title_id)
         return removed
 
 
@@ -98,7 +107,7 @@ def title_cache_dir(state, title_id, abi=None):
     return Path(state) / 'gpu' / _abi(abi) / 'cache' / title_id
 
 
-def ensure_cache_home(state) -> Path:
+def ensure_cache_home(state, abi=None) -> Path:
     """Create the GPU cache home the launcher points ORDER1886_GPU_USER_DIR at.
 
     path_util.cpp falls back to the shared per-user directory (XDG / %APPDATA%
@@ -106,9 +115,8 @@ def ensure_cache_home(state) -> Path:
     that caches live with the package — and makes a shipped seed bundle
     unimportable. Always called before the runtime starts.
     """
-    import order1886
-
-    home = Path(state) / 'gpu' / order1886.SHADER_CACHE_ABI
+    home = Path(state) / 'gpu' / _abi(abi)
+    _check_ancestors(home / 'cache')
     (home / 'cache').mkdir(parents=True, exist_ok=True)
     return home
 
@@ -133,28 +141,31 @@ _WARMUP_FAULT_FRAMES = ('PipelineCache6WarmUp', 'PipelineCache::WarmUp',
 
 
 def _warmup_crash(report):
-    """Return the crashed boot's log text if the run died replaying the cache."""
+    """Recognize a fatal native error while the game is still starting."""
     if report.get('status') != 'failed' or not report.get('log'):
-        return None
+        return False
     try:
         text = Path(report['log']).read_text(encoding='utf-8', errors='replace')
     except OSError:
-        return None
+        return False
     _, fault, backtrace = text.rpartition('Host fault')
-    if not fault or not any(frame in backtrace for frame in _WARMUP_FAULT_FRAMES):
-        return None
-    return backtrace
+    if fault and any(frame in backtrace for frame in _WARMUP_FAULT_FRAMES):
+        return True
+    # Windows can exit through the GPU assertion handler instead of emitting a
+    # native backtrace. Ignore the same assertion after the presenter is ready.
+    return (report.get('exit_code') == 23
+            and 'Failed to create graphics pipeline:' in text
+            and 'STOP: GPU library assertion failed' in text
+            and 'GPU: window and Vulkan presenter ready' not in text)
 
 
-def quarantine_crashed_cache(state, log=print):
+def quarantine_crashed_cache(state, log=print, *, abi=None):
     """Set aside a pipeline cache whose replay crashed the previous boot.
 
     WarmUp replays every recorded pipeline before the first frame, so a single
-    entry the driver cannot rebuild crashes every launch, forever. When
-    logs/last-run.json says the last boot failed with a host fault inside that
-    replay, the title's cache is renamed to <TITLE_ID>.crashed-<run> (the cache
-    is regenerable; nothing is deleted except an older quarantine of the same
-    title) and the next boot starts clean. Returns the quarantine path or None.
+    entry the driver cannot rebuild can crash subsequent launches. Move only
+    the current build's affected title aside; keep the previous files for diagnosis.
+    Returns the quarantine path or None.
     """
     state = Path(state).absolute()
     try:
@@ -162,8 +173,10 @@ def quarantine_crashed_cache(state, log=print):
     except (OSError, ValueError):
         return None
     title_id = report.get('title_id')
-    abi = report.get('shader_cache_abi') or None
-    if not isinstance(title_id, str) or not title_id.isalnum() or _warmup_crash(report) is None:
+    abi = _abi(abi)
+    if report.get('shader_cache_abi', abi) != abi:
+        return None  # a different build's cache is not used on this launch
+    if not isinstance(title_id, str) or not title_id.isalnum() or not _warmup_crash(report):
         return None
     cache = title_cache_dir(state, title_id, abi)
     _check_ancestors(cache)
@@ -200,8 +213,10 @@ def export_shader_cache_seed(cache: Path, out: Path, title_id: str, log=print, a
     other blob is engine-SPIR-V and pipeline keys, which replay on any device
     whose Shader::Profile matches (the runtime enforces that at load).
     """
-    abi = _abi(abi)
     cache, out = Path(cache), Path(out)
+    if abi is None and cache.parent.name == 'cache' and cache.parent.parent.parent.name == 'gpu':
+        abi = cache.parent.parent.name
+    abi = _abi(abi)
     blobs = out / 'blobs'
     if blobs.exists():
         shutil.rmtree(blobs)
@@ -293,15 +308,13 @@ def import_shader_cache_seeds(state, install_root=None, log=print, abi=None) -> 
     return receipts
 
 
-def prepare_cache_for_launch(state, install_root=None, log=print):
-    """One launch-time step: keep the cache in the package, set aside a cache
-    whose replay crashed the last boot, and import any shipped seed. Never
-    fails a launch over cache work."""
+def prepare_cache_for_launch(state, install_root=None, log=print, *, abi=None):
+    """Prepare the current build's cache, then try its matching optional seed."""
+    ensure_cache_home(state, abi)
+    if quarantine_crashed_cache(state, log, abi=abi):
+        return []  # a seed may be what crashed; this boot rebuilds from scratch
     try:
-        ensure_cache_home(state)
-        if quarantine_crashed_cache(state, log):
-            return []  # a seed may be what crashed; this boot rebuilds from scratch
-        return import_shader_cache_seeds(state, install_root, log)
+        return import_shader_cache_seeds(state, install_root, log, abi)
     except Exception as error:  # noqa: BLE001 - a broken seed must not stop the game
         log(f'order1886 cache: {error}')
         return []
