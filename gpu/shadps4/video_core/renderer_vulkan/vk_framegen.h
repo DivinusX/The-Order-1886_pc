@@ -38,7 +38,8 @@ public:
     // One-time context for a max render size and a fixed display size. Recreate() after a swapchain
     // resize. Colour format matches the scene input (RGBA16F for the resolved scene).
     bool Create(const Instance& instance, u32 max_render_w, u32 max_render_h, u32 display_w,
-                u32 display_h, bool hdr_scrgb);
+                u32 display_h, bool hdr_scrgb,
+                VkFormat color_format = VK_FORMAT_R16G16B16A16_SFLOAT);
     void Recreate(const Instance& instance, u32 max_render_w, u32 max_render_h, u32 display_w,
                   u32 display_h, bool hdr_scrgb);
     void Destroy();

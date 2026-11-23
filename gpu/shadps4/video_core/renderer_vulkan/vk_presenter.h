@@ -45,6 +45,9 @@ struct Frame {
     // SDK's interpolated HDR scene, fg_display the post-processed frame awaiting its extra
     // present. fg_valid means both were recorded on the draw scheduler before
     // ready_semaphore, so the present queue sees them through the same timeline wait.
+    VmaAllocation fg_ldr_alloc{};
+    vk::Image fg_ldr{};      ///< the game's composited LDR band, FG's color feed (#47)
+    vk::ImageView fg_ldr_view{};
     VmaAllocation fg_hdr_alloc{};
     vk::Image fg_hdr{};
     vk::ImageView fg_hdr_view{};

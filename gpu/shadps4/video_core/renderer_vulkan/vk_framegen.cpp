@@ -79,7 +79,8 @@ void FrameGeneration::Load() {
 }
 
 bool FrameGeneration::Create(const Instance& instance, u32 max_render_w, u32 max_render_h,
-                             u32 display_w, u32 display_h, bool hdr_scrgb) {
+                             u32 display_w, u32 display_h, bool hdr_scrgb,
+                             VkFormat color_format) {
     if (!available() || context_) {
         return context_ != nullptr;
     }
@@ -98,7 +99,7 @@ bool FrameGeneration::Create(const Instance& instance, u32 max_render_w, u32 max
         .max_render_height = max_render_h,
         .display_width = display_w,
         .display_height = display_h,
-        .color_format = VK_FORMAT_R16G16B16A16_SFLOAT,
+        .color_format = color_format,
         .flags = hdr_scrgb ? static_cast<u32>(ORDER_FRAMEGEN_HDR_SCRGB) : 0u,
     };
     void* context = nullptr;

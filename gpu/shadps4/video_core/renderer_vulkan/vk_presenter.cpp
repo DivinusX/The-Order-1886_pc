@@ -455,6 +455,8 @@ Presenter::~Presenter() {
         if (frame.fg_hdr) {
             device.destroyImageView(frame.fg_hdr_view);
             vmaDestroyImage(instance.GetAllocator(), frame.fg_hdr, frame.fg_hdr_alloc);
+            device.destroyImageView(frame.fg_ldr_view);
+            vmaDestroyImage(instance.GetAllocator(), frame.fg_ldr, frame.fg_ldr_alloc);
             device.destroyImageView(frame.fg_pre_view);
             vmaDestroyImage(instance.GetAllocator(), frame.fg_pre, frame.fg_pre_alloc);
             device.destroyImageView(frame.fg_display_view);
@@ -488,6 +490,8 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
     if ((fg_hdr_w != w || fg_hdr_h != h) && frame->fg_hdr) {
         device.destroyImageView(frame->fg_hdr_view);
         vmaDestroyImage(instance.GetAllocator(), frame->fg_hdr, frame->fg_hdr_alloc);
+        device.destroyImageView(frame->fg_ldr_view);
+        vmaDestroyImage(instance.GetAllocator(), frame->fg_ldr, frame->fg_ldr_alloc);
         device.destroyImageView(frame->fg_pre_view);
         vmaDestroyImage(instance.GetAllocator(), frame->fg_pre, frame->fg_pre_alloc);
         device.destroyImageView(frame->fg_display_view);
@@ -527,11 +531,15 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
                  .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}}));
             return true;
         };
-        if (!make(vk::Format::eR16G16B16A16Sfloat,
+        if (!make(frame->format,
+                  vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled |
+                      vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc,
+                  frame->fg_ldr, frame->fg_ldr_alloc, frame->fg_ldr_view, w, h) ||
+            !make(frame->format,
                   vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
                       vk::ImageUsageFlagBits::eTransferSrc,
                   frame->fg_hdr, frame->fg_hdr_alloc, frame->fg_hdr_view, w, h) ||
-            !make(vk::Format::eR16G16B16A16Sfloat,
+            !make(frame->format,
                   vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
                   frame->fg_pre, frame->fg_pre_alloc, frame->fg_pre_view, frame->width,
                   frame->height) ||
@@ -550,7 +558,8 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
     }
     if (!framegen_ctx_ready) {
         FGSTEP("ctxcreate");
-        if (!framegen.Create(instance, w, h, w, h, false)) {
+        if (!framegen.Create(instance, w, h, w, h, false,
+                             static_cast<VkFormat>(frame->format))) {
             if (++framegen_fail_streak > 8) {
                 framegen_ready = false;
                 std::printf("FrameGen: provider create failed; feature off\n");
@@ -565,11 +574,72 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
         std::fflush(stdout);
     }
 
+    // Feed the SDK the game's own composited LDR band (post tonemap, post letterbox):
+    // generated frames then match the real ones exactly except where motion was
+    // interpolated - no tonemap mismatch flicker. Depth/motion stay in scene space.
+    {
+        const auto fit = FitImage(static_cast<s32>(w), static_cast<s32>(h),
+                                  static_cast<s32>(frame->width),
+                                  static_cast<s32>(frame->height));
+        const vk::ImageMemoryBarrier2 to_src{
+            .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            .srcAccessMask = vk::AccessFlags2{vk::AccessFlagBits2::eColorAttachmentWrite},
+            .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+            .dstAccessMask = vk::AccessFlags2{vk::AccessFlagBits2::eTransferRead},
+            .oldLayout = vk::ImageLayout::eGeneral,
+            .newLayout = vk::ImageLayout::eTransferSrcOptimal,
+            .image = frame->image,
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+        };
+        const vk::ImageMemoryBarrier2 ldr_fresh{
+            .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+            .dstAccessMask = vk::AccessFlags2{vk::AccessFlagBits2::eTransferWrite},
+            .oldLayout = vk::ImageLayout::eUndefined,
+            .newLayout = vk::ImageLayout::eTransferDstOptimal,
+            .image = frame->fg_ldr,
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+        };
+        const std::array in{to_src, ldr_fresh};
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 2,
+                                                   .pImageMemoryBarriers = in.data()});
+        const vk::ImageBlit crop{
+            .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+            .srcOffsets = {{vk::Offset3D{fit.offset.x, fit.offset.y, 0},
+                            vk::Offset3D{fit.offset.x + static_cast<s32>(fit.extent.width),
+                                         fit.offset.y + static_cast<s32>(fit.extent.height), 1}}},
+            .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+            .dstOffsets = {{vk::Offset3D{0, 0, 0}, vk::Offset3D{static_cast<s32>(w), static_cast<s32>(h), 1}}},
+        };
+        cmdbuf.blitImage(frame->image, vk::ImageLayout::eTransferSrcOptimal, frame->fg_ldr,
+                         vk::ImageLayout::eTransferDstOptimal, crop, vk::Filter::eNearest);
+        const vk::ImageMemoryBarrier2 ldr_read{
+            .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+            .srcAccessMask = vk::AccessFlags2{vk::AccessFlagBits2::eTransferWrite},
+            .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+            .dstAccessMask = vk::AccessFlags2{vk::AccessFlagBits2::eShaderRead},
+            .oldLayout = vk::ImageLayout::eTransferDstOptimal,
+            .newLayout = vk::ImageLayout::eGeneral,
+            .image = frame->fg_ldr,
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+        };
+        const vk::ImageMemoryBarrier2 back{
+            .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+            .srcAccessMask = vk::AccessFlags2{vk::AccessFlagBits2::eTransferRead},
+            .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+            .oldLayout = vk::ImageLayout::eTransferSrcOptimal,
+            .newLayout = vk::ImageLayout::eGeneral,
+            .image = frame->image,
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+        };
+        const std::array out{ldr_read, back};
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 2,
+                                                   .pImageMemoryBarriers = out.data()});
+    }
     FramegenScene fscene{
-        .color = scene.color,
+        .color = frame->fg_ldr,
         .depth = scene.depth,
         .motion = scene.motion,
-        .color_format = VK_FORMAT_R16G16B16A16_SFLOAT,
+        .color_format = static_cast<VkFormat>(frame->format),
         .width = scene.width,
         .height = scene.height,
         .frame_ms = scene.frame_ms,
@@ -728,9 +798,10 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
         static int fg_dump_index = 0;
         if (fg_dump_index < 24) { // a short burst is enough for the numeric sanity check
             DumpRaw(instance, draw_scheduler, cmdbuf, frame->fg_display,
-                    vk::ImageLayout::eGeneral, w, h, "fgframe", fg_dump_index);
-            DumpRaw(instance, draw_scheduler, cmdbuf, frame->image, vk::ImageLayout::eGeneral, w,
-                    h, "realframe", fg_dump_index);
+                    vk::ImageLayout::eGeneral, frame->width, frame->height, "fgframe",
+                    fg_dump_index);
+            DumpRaw(instance, draw_scheduler, cmdbuf, frame->image, vk::ImageLayout::eGeneral,
+                    frame->width, frame->height, "realframe", fg_dump_index);
             ++fg_dump_index;
         }
     }
