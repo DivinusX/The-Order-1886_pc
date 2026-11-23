@@ -571,8 +571,8 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
         }
         framegen_ctx_ready = true;
         fg_seq = 0;
-        std::printf("FrameGen: generating at %ux%u (v0 requires output size == scene size)\n", w,
-                    h);
+        std::printf("FrameGen: generating from %ux%u feed into %ux%u output\n", w, h,
+                    frame->width, frame->height);
         std::fflush(stdout);
     }
 
@@ -664,13 +664,6 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
     }
     framegen_fail_streak = 0;
 
-    if (step_trace) {
-        const u32 di = static_cast<u32>(fg_seq);
-        DumpRaw(instance, draw_scheduler, cmdbuf, frame->fg_ldr, vk::ImageLayout::eGeneral, w, h,
-                "fgldr", di);
-        DumpRaw(instance, draw_scheduler, cmdbuf, frame->fg_hdr, vk::ImageLayout::eGeneral, w, h,
-                "fghdr", di);
-    }
     // Band the scene (e.g. the 2.4:1 cinematic window) into frame space with black bars,
     // exactly like the game composes its own letterbox, then post-process the frame-sized HDR.
     const auto fit = FitImage(static_cast<s32>(w), static_cast<s32>(h),
@@ -817,8 +810,8 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
                     fg_dump_index);
             DumpRaw(instance, draw_scheduler, cmdbuf, frame->image, vk::ImageLayout::eGeneral,
                     frame->width, frame->height, "realframe", fg_dump_index);
-            ++fg_dump_index;
         }
+        ++fg_dump_index;
     }
     FGSTEP("hudcopied");
     frame->fg_valid = true;
