@@ -138,6 +138,8 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         }
     } else if (key == "htile_expand") {
         v.htile_expand = i != 0;
+    } else if (key == "frame_generation") {
+        v.frame_generation = i != 0;
     } else if (key == "live_resolution") {
         v.live_resolution = value == "auto" ? -1 : std::clamp(i, 0, 1);
     } else if (key == "output_res") {
@@ -191,6 +193,7 @@ void Load() {
         {"ORDER1886_RCAS", "rcas"},                        {"ORDER1886_FRAMES_AHEAD", "frames_queued"},
         {"ORDER1886_ANISOTROPY", "anisotropy"},            {"ORDER1886_VIBRATION", "vibration"},
         {"ORDER1886_SUN_SYNC", "sun_sync"},                {"ORDER1886_HTILE_DRAW_EXPAND", "htile_expand"},
+        {"ORDER1886_FRAMEGEN", "frame_generation"},
     };
     for (const auto& [env, key] : env_keys) {
         if (const char* value = std::getenv(env); value && value[0]) {
@@ -209,6 +212,7 @@ void Load() {
     v.startup_preset = v.preset;
     v.startup_upscaler = v.upscaler;
     v.startup_requested_upscaler = v.requested_upscaler;
+    v.startup_frame_generation = v.frame_generation.load();
     v.startup_object_motion = v.object_motion;
     v.startup_output_res = v.output_res;
     v.startup_live_resolution = v.live_resolution;
@@ -308,6 +312,9 @@ void Save() {
     // readback mode and expand switch, or the next launch silently reverts the flicker fix.
     std::fprintf(file, "sun_sync=%d\nhtile_expand=%d\n",
         v.sun_sync.load(), int(v.htile_expand.load()));
+    if (v.frame_generation.load()) {
+        std::fprintf(file, "frame_generation=1\n");
+    }
     // The launcher's FSR 3.1 choice arrives as this key; dropping it on an in-game save would
     // switch the player back to the game's own resolve at the next launch.
     if (v.requested_upscaler != UpscalerOff) {
