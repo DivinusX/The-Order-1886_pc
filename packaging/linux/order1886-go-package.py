@@ -176,7 +176,7 @@ def main() -> None:
     # build.sh leaves them beside the runtime. FSR 3.1 is the fallback every GPU can run, so it is
     # required; the FSR 4 provider is optional (its v07 asset bundle is staged by the release step).
     providers = []
-    for name in ('order1886_fsr3.so', 'order1886_fsr4.so'):
+    for name in ('order1886_fsr3.so', 'order1886_fsr4.so', 'order1886_fg.so'):
         source = runtime.parent / name
         if source.is_file():
             shutil.copy2(source, destination / 'bin' / name)
@@ -185,7 +185,7 @@ def main() -> None:
         elif name == 'order1886_fsr3.so':
             fail(f'{name} is missing next to the runtime; build it with build.sh first.')
         else:
-            print(f'Warning: {name} is not next to the runtime; the package ships FSR 3.1 only.', flush=True)
+            print(f'Warning: {name} is not next to the runtime; the package ships without it.', flush=True)
     (destination / 'bin/gpu').mkdir()
     shutil.copy2(gpu, destination / 'bin/gpu/libps4gpu.so')
     # The runtime stays byte-identical to its receipt; its RUNPATH already starts with $ORIGIN/gpu.

@@ -120,6 +120,14 @@ try {
         throw 'order1886_fsr4.dll is missing next to the runtime; build it with build.sh first.'
     }
     Copy-Item -LiteralPath $provider4 -Destination (Join-Path $runtimeBin 'order1886_fsr4.dll')
+    # Optional frame-generation provider (#47): shipped when built; the runtime only loads it
+    # when frame_generation is enabled, and says why when it is missing.
+    $providerFg = Join-Path (Split-Path -Parent $runtimePath) 'order1886_fg.dll'
+    if (Test-Path -LiteralPath $providerFg) {
+        Copy-Item -LiteralPath $providerFg -Destination (Join-Path $runtimeBin 'order1886_fg.dll')
+    } else {
+        Write-Host 'order1886_fg.dll not built next to the runtime; package ships without frame generation.'
+    }
     if ($fsr4AssetsPath) {
         $bundleSrc = $fsr4AssetsPath
         foreach ($required in @('LICENSE-FSR4-v07.txt', 'rcas.spv', 'spd_auto_exposure.spv')) {
