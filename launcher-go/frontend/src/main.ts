@@ -21,8 +21,8 @@ type Snapshot = {trophies:{id:number;unlocked_at:number}[];trophy_error:string;s
 type AppBridge = {Call:(method:string,params:Record<string,unknown>)=>Promise<string>;
   Browse:(kind:string)=>Promise<string>;OpenLink:(name:string)=>Promise<void>;
   StartupError:()=>Promise<string>;ConfirmClose:()=>Promise<void>;OpenLocation:(kind:string)=>Promise<void>;
-  UpdateState:()=>Promise<string>;UpdateCheck:()=>Promise<string>;UpdateDownload:()=>Promise<string>;
-  UpdateCancel:()=>Promise<string>;UpdateInstall:()=>Promise<void>;UpdateRestore:()=>Promise<void>};
+  UpdateState:()=>Promise<string|Partial<UpdateStatus>>;UpdateCheck:()=>Promise<string|Partial<UpdateStatus>>;UpdateDownload:()=>Promise<string|Partial<UpdateStatus>>;
+  UpdateCancel:()=>Promise<string|Partial<UpdateStatus>>;UpdateInstall:()=>Promise<void>;UpdateRestore:()=>Promise<void>};
 declare global { interface Window {
   go?:{main:{App:AppBridge}};
   runtime?:{EventsOn:(name:string,callback:(event:any)=>void)=>void};
@@ -38,7 +38,7 @@ let disconnected = false;
 let saving = 0;
 let update:UpdateStatus|null = null;
 async function refreshUpdate() {
- try { update = parseUpdate(await bridge().UpdateState()); } catch { update = null; }
+ try { update = parseUpdate(await bridge().UpdateState()); } catch { /* keep the last known state: a failed poll must not collapse the panel mid-download */ }
  return update;
 }
 const queueSettingsSave=createSettingsSaver(key=>snapshot.settings[key],commitSetting);

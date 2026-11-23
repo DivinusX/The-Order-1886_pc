@@ -93,3 +93,25 @@ test('check and download stay disabled while either is running', () => {
   const downloading = updateSection({...base, state: 'downloading'}, t, escape, false);
   assert.doesNotMatch(downloading, /data-action="update\.cancel" disabled/);
 });
+
+test('the wails proxy object shape parses like the JSON text shape (#60)', () => {
+  const object = parseUpdate({state: 'downloading', version: 'v0.2.48', downloaded: 40, total: 200});
+  const text = parseUpdate(JSON.stringify({state: 'downloading', version: 'v0.2.48', downloaded: 40, total: 200}));
+  assert.deepEqual(object, text);
+  assert.equal(object.state, 'downloading');
+});
+
+test('an absent binding response is an idle status, not a crash', () => {
+  assert.equal(parseUpdate(null).state, 'idle');
+  assert.equal(parseUpdate(undefined).state, 'idle');
+});
+
+test('corrupt text still throws so the caller keeps the last known state', () => {
+  assert.throws(() => parseUpdate('[object Object]'));
+});
+
+test('a downloading status keeps its cancel action without an object-vs-text regression', () => {
+  const html = updateSection(parseUpdate({state: 'downloading', downloaded: 1, total: 100}), t, escape, false);
+  assert.match(html, /data-action="update\.cancel"/);
+  assert.doesNotMatch(html, /Update state unavailable/);
+});

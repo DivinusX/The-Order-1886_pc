@@ -5,8 +5,10 @@ export type UpdateStatus = {
   install_available: boolean; install_reason: string;
 };
 
-export function parseUpdate(raw: string): UpdateStatus {
-  const value = JSON.parse(raw) as Partial<UpdateStatus>;
+export function parseUpdate(raw: string | Partial<UpdateStatus> | null | undefined): UpdateStatus {
+  // The wails proxy resolves struct-returning bindings to plain objects; the worker
+  // bridge returns JSON text. Both are legitimate shapes of the same status.
+  const value = (typeof raw === 'string' ? JSON.parse(raw) : raw ?? {}) as Partial<UpdateStatus>;
   return {
     state: value.state ?? 'idle', version: value.version ?? '', downloaded: value.downloaded ?? 0,
     total: value.total ?? 0, channel: value.channel ?? 'preview', automatic: value.automatic ?? false,
