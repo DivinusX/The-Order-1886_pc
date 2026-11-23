@@ -38,6 +38,9 @@ func TestInstalledIsCurrent(t *testing.T) {
 }
 
 func TestDownloadRefusedWhileBusyOrRunning(t *testing.T) {
+	if !updaterPlatformSupported {
+		t.Skip("the updater flow is guarded off this platform; see TestUpdaterPlatformGuard")
+	}
 	app := &App{root: t.TempDir(), state: t.TempDir()}
 	app.release = updates.Release{Tag: "v9.9.9"}
 	app.update.State = "downloading"
@@ -54,5 +57,30 @@ func TestDownloadRefusedWhileBusyOrRunning(t *testing.T) {
 	app.update.State = "current"
 	if status := app.UpdateDownload(); status.State != "failed" {
 		t.Fatalf("download of the installed version allowed: %+v", status)
+	}
+}
+
+func TestUpdaterPlatformGuard(t *testing.T) {
+	app := &App{root: t.TempDir(), state: t.TempDir()}
+	if got := app.updateStatus().Supported; got != updaterPlatformSupported {
+		t.Fatalf("status supported = %v, want %v", got, updaterPlatformSupported)
+	}
+	if updaterPlatformSupported {
+		return // Windows keeps the full flow, covered by the tests above.
+	}
+	if status := app.UpdateCheck(); status.State != "unsupported" || status.Error == "" {
+		t.Errorf("UpdateCheck must refuse without touching the network: %+v", status)
+	}
+	if status := app.UpdateDownload(); status.State != "unsupported" {
+		t.Errorf("UpdateDownload must refuse: %+v", status)
+	}
+	if err := app.UpdateInstall(); err == nil {
+		t.Error("UpdateInstall must refuse on an unsupported platform")
+	}
+	if err := app.UpdateRestore(); err == nil {
+		t.Error("UpdateRestore must refuse on an unsupported platform")
+	}
+	if _, err := os.Stat(filepath.Join(app.state, "updates")); !os.IsNotExist(err) {
+		t.Error("the guarded UpdateDownload created the update stage directory")
 	}
 }

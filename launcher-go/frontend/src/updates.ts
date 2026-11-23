@@ -2,7 +2,7 @@ export type UpdateStatus = {
   state: string; version: string; downloaded: number; total: number;
   channel: string; automatic: boolean; error: string;
   recovery_pending: boolean; recovery_blocked: boolean; rollback_available: boolean;
-  install_available: boolean; install_reason: string;
+  install_available: boolean; install_reason: string; supported: boolean;
 };
 
 export function parseUpdate(raw: string | Partial<UpdateStatus> | null | undefined): UpdateStatus {
@@ -16,6 +16,8 @@ export function parseUpdate(raw: string | Partial<UpdateStatus> | null | undefin
     recovery_blocked: value.recovery_blocked ?? false,
     rollback_available: value.rollback_available ?? false,
     install_available: value.install_available ?? false, install_reason: value.install_reason ?? '',
+    // Older backends omit the flag; treat them as capable (Windows-shaped installs).
+    supported: value.supported ?? true,
   };
 }
 
@@ -45,6 +47,9 @@ export function updateHeadline(status: UpdateStatus | null, t: (value: string) =
 
 export function updateSection(status: UpdateStatus | null, t: (value: string) => string,
                                escape: (value: unknown) => string, disabled: boolean) {
+  // The backend hides in-app updates where the release carries no payload for this OS.
+  // Only an explicit false hides: older statuses omit the field and mean capable.
+  if (status && status.supported === false) return '';
   // A check or download in flight owns the update state until it reports back.
   const inFlight = status?.state === 'checking' || status?.state === 'downloading';
   const busy = disabled || status === null || inFlight;

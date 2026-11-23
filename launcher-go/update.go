@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,16 @@ import (
 	"github.com/JulioCacko/The-Order-1886_pc/launcher-go/internal/updatehost"
 	"github.com/JulioCacko/The-Order-1886_pc/launcher-go/internal/updates"
 )
+
+// updaterPlatformSupported reports whether in-app updates apply to this build. The updater
+// payload is order1886-go-windows.zip (release.go's single goAsset): staging it onto a Linux
+// installation would write the Windows file layout over the Linux one - stale entry binaries,
+// foreign .exe files and a package-manifest the Linux file-check then reports as corrupt.
+// Until a Linux-shaped updater asset exists, the panel is hidden and every updater entry point
+// refuses; players update Linux by extracting the versioned tar.gz over the installation.
+const updaterPlatformSupported = runtime.GOOS == "windows"
+
+const updaterPlatformMessage = "in-app updates are not available on this platform: download the Linux package from the GitHub releases page and extract it over the installation, keeping the user folder"
 
 // UpdateStatus is what the Home and System pages render.
 type UpdateStatus struct {
@@ -35,6 +46,8 @@ type UpdateStatus struct {
 	// itself when the helper exists in this build and no update is in flight.
 	InstallAvailable bool   `json:"install_available"`
 	InstallReason    string `json:"install_reason"`
+	// Supported hides the panel entirely where the updater has no payload for this OS (#60 guard).
+	Supported bool `json:"supported"`
 }
 
 // helperRun is the parsed helper invocation, before any window or worker exists.
@@ -156,6 +169,7 @@ func (app *App) updateStatus() UpdateStatus {
 	if status.State == "" {
 		status.State = "idle"
 	}
+	status.Supported = updaterPlatformSupported
 	status.Automatic = app.autoUpdates
 	pending, blocked, _ := pendingRecovery(app.root)
 	status.RecoveryPending = pending
@@ -188,6 +202,9 @@ func (app *App) UpdateState() UpdateStatus { return app.updateStatus() }
 // startupUpdateCheck honours automatic_updates as a background version check: it
 // never downloads, never installs and never blocks the window.
 func (app *App) startupUpdateCheck() {
+	if !updaterPlatformSupported {
+		return
+	}
 	channel := app.updateChannel()
 	automatic := app.automaticUpdates()
 	app.updateMu.Lock()
@@ -211,6 +228,13 @@ func (app *App) startupUpdateCheck() {
 
 // UpdateCheck looks for a newer release on the configured channel.
 func (app *App) UpdateCheck() UpdateStatus {
+	if !updaterPlatformSupported {
+		app.updateMu.Lock()
+		app.update.State = "unsupported"
+		app.update.Error = updaterPlatformMessage
+		app.updateMu.Unlock()
+		return app.updateStatus()
+	}
 	app.updateMu.Lock()
 	app.setUpdateLocked("checking")
 	app.updateMu.Unlock()
@@ -268,6 +292,13 @@ var errDownloadStalled = errors.New("the download stalled: no data for a minute;
 
 // UpdateDownload fetches and verifies the release into a private stage.
 func (app *App) UpdateDownload() UpdateStatus {
+	if !updaterPlatformSupported {
+		app.updateMu.Lock()
+		app.update.State = "unsupported"
+		app.update.Error = updaterPlatformMessage
+		app.updateMu.Unlock()
+		return app.updateStatus()
+	}
 	app.mu.Lock()
 	busy := app.busy
 	app.mu.Unlock()
@@ -354,6 +385,9 @@ func (app *App) UpdateCancel() UpdateStatus {
 // UpdateInstall prepares the replacement, starts the helper copy and closes the
 // launcher. The helper waits for this process, holds the locks and relaunches.
 func (app *App) UpdateInstall() error {
+	if !updaterPlatformSupported {
+		return errors.New(updaterPlatformMessage)
+	}
 	app.updateMu.Lock()
 	candidate := app.candidate
 	app.updateMu.Unlock()
@@ -408,6 +442,9 @@ func (app *App) UpdateInstall() error {
 // UpdateRestore rolls the installation back: recovery for an interrupted update,
 // rollback for a completed one the player wants to undo.
 func (app *App) UpdateRestore() error {
+	if !updaterPlatformSupported {
+		return errors.New(updaterPlatformMessage)
+	}
 	action := updatehost.ActionRecover
 	phase, exists, err := updates.JournalPhase(app.root)
 	if err != nil {

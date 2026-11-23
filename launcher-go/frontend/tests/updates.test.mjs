@@ -115,3 +115,11 @@ test('a downloading status keeps its cancel action without an object-vs-text reg
   assert.match(html, /data-action="update\.cancel"/);
   assert.doesNotMatch(html, /Update state unavailable/);
 });
+
+test('the panel disappears where the platform has no updater payload', () => {
+  const hidden = parseUpdate({state: 'idle', supported: false});
+  assert.equal(hidden.supported, false);
+  assert.equal(updateSection(hidden, t, escape, false), '');
+  // An absent flag is a capable backend (older Windows builds), not a hidden panel.
+  assert.match(updateSection(parseUpdate({state: 'idle'}), t, escape, false), /update\.check/);
+});
