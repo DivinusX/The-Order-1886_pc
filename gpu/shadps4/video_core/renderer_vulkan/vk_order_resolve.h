@@ -9,6 +9,7 @@
 
 #include <span>
 #include "common/types.h"
+#include "video_core/renderer_vulkan/vk_common.h"
 #include "video_core/amdgpu/regs_depth.h"
 #include "video_core/texture_cache/types.h"
 
@@ -40,6 +41,23 @@ void ReplaceTemporalResolve(Rasterizer& rasterizer, std::span<const VideoCore::I
 /// own samples can be resolved by the engine without the history blend, in place of the game's
 /// dispatch. Read per dispatch, so the menu switches it live.
 [[nodiscard]] bool CleanResolveWanted();
+
+/// The resolved scene published for #47 frame generation. The prep pass leaves
+/// colour/motion/depth (targets[0..2]) in SHADER_READ_ONLY_OPTIMAL after its dispatch; the
+/// frame generator reads exactly those views. revision advances once per resolved frame, so
+/// the present thread consumes each scene exactly once and ignores frames the game resolved
+/// itself (menus, loads). Images are resolve-owned and only recreated after scheduler.Finish,
+/// which covers every consumer recorded on the draw scheduler.
+struct SceneFrame {
+    vk::Image color{}, motion{}, depth{};
+    vk::ImageView color_view{}, motion_view{}, depth_view{};
+    u32 width = 0, height = 0;
+    float frame_ms = 33.3f;
+    bool depth_reversed = false;
+};
+
+/// Copy the newest resolved scene into out; false when nothing resolved since revision.
+bool ConsumeSceneFrame(u64& revision, SceneFrame& out);
 
 /// Records that engine-side resolve over the game's resolve output, where the game's dispatch
 /// would run. Returns true when recorded - the caller then skips the game's dispatch; false

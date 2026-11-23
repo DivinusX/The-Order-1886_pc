@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <mutex>
 #include <cstdio>
 #include <cstring>
 #include <optional>
@@ -158,6 +159,13 @@ struct Resolve {
             .flags = ORDER_UPSCALE_HDR | ORDER_UPSCALE_DEPTH_INFINITE |
                      (depth_inverted ? ORDER_UPSCALE_DEPTH_INVERTED : 0u),
         };
+        if (!provider) {
+            std::printf("Upscaler: frame-generation feed at %ux%u (no temporal provider, depth "
+                        "inverted %d)\n",
+                        w, h, depth_inverted ? 1 : 0);
+            std::fflush(stdout);
+            return true;
+        }
         char error[256]{};
         if (provider->api.create(&upscale_device, &config, &context, error, sizeof(error)) !=
             ORDER_UPSCALE_OK) {
@@ -208,7 +216,10 @@ const UpscaleProvider* Selected(const Instance& instance) {
 }
 
 bool Wanted() {
-    static const bool wanted = Ps4Settings::Get().requested_upscaler != Ps4Settings::UpscalerOff;
+    // #47: frame generation runs on the scene this pass decodes even when no temporal upscaler
+    // was requested; the provider path below then records the prep pass only.
+    static const bool wanted = Ps4Settings::Get().requested_upscaler != Ps4Settings::UpscalerOff ||
+                               Ps4Settings::Get().frame_generation.load();
     return wanted;
 }
 
@@ -313,6 +324,21 @@ struct CleanResolve {
     }
 };
 
+std::mutex scene_mutex;
+SceneFrame scene;
+std::atomic<u64> scene_revision{0};
+
+bool ConsumeSceneFrame(u64& revision, SceneFrame& out) {
+    const u64 now = scene_revision.load(std::memory_order_acquire);
+    if (now == revision) {
+        return false;
+    }
+    std::lock_guard lock{scene_mutex};
+    out = scene;
+    revision = now;
+    return true;
+}
+
 CleanResolve& CleanState() {
     static CleanResolve state;
     return state;
@@ -356,7 +382,7 @@ void ReplaceTemporalResolve(Rasterizer& rasterizer, std::span<const VideoCore::I
     }
     if (!resolve.provider) {
         resolve.provider = Selected(instance);
-        if (!resolve.provider) {
+        if (!resolve.provider && !Ps4Settings::Get().frame_generation.load()) {
             resolve.failed = true; // ReportUpscalerFallback already logged why
             return;
         }
@@ -523,6 +549,9 @@ void ReplaceTemporalResolve(Rasterizer& rasterizer, std::span<const VideoCore::I
                                      w, h, static_cast<VkImageUsageFlags>(target.usage),
                                      static_cast<VkImageLayout>(layout)};
         };
+        if (!resolve.provider) {
+            return; // prep-only (frame generation feed): the game's own result stands.
+        }
         const auto read_only = vk::ImageLayout::eShaderReadOnlyOptimal;
         const OrderUpscaleFrame frame{
             .command_buffer = static_cast<VkCommandBuffer>(cmdbuf),
@@ -576,6 +605,22 @@ void ReplaceTemporalResolve(Rasterizer& rasterizer, std::span<const VideoCore::I
             std::fflush(stdout);
         }
     });
+    // #47: publish the decoded scene (targets are in SHADER_READ_ONLY_OPTIMAL here and are
+    // only recreated after scheduler.Finish, which orders every consumer on this scheduler).
+    if (Ps4Settings::Get().frame_generation.load()) {
+        std::lock_guard lock{scene_mutex};
+        scene.color = own[0];
+        scene.motion = own[1];
+        scene.depth = own[2];
+        scene.color_view = own_views[0];
+        scene.motion_view = own_views[1];
+        scene.depth_view = own_views[2];
+        scene.width = w;
+        scene.height = h;
+        scene.frame_ms = frame_ms;
+        scene.depth_reversed = resolve.depth_inverted;
+        scene_revision.fetch_add(1, std::memory_order_release);
+    }
 }
 
 bool CleanResolveWanted() {
