@@ -36,7 +36,7 @@ MINGW*|MSYS*)
     # Upscaler providers, loaded by the runtime from its own folder (vk_upscale_providers.cpp).
     # FSR 3.1 is the fallback when the device cannot run the FSR 4 v07 shaders (#12); the
     # provider target itself is platform-neutral (only ${CMAKE_DL_LIBS} was Linux-only).
-    for provider in fsr3 fsr4; do
+    for provider in fsr3 fsr4 fg; do
         cmake -S "gpu/upscalers/$provider" -B "out/$provider-provider" -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ >/dev/null
         if ! ninja -C "out/$provider-provider" "order1886_$provider" >> out/gpu-build.log 2>&1; then
@@ -119,7 +119,7 @@ fi
 # Upscaler providers the runtime dlopens beside its own binary (vk_upscale_providers.cpp).
 # The Order's temporal resolve replacement needs both: FSR 3.1 is the fallback when the device
 # cannot run the FSR 4 v07 shaders (#12).
-for provider in fsr3 fsr4; do
+for provider in fsr3 fsr4 fg; do
     cmake -S "gpu/upscalers/$provider" -B "out/$provider-provider" -G Ninja \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo >> out/gpu-build.log 2>&1
     if ! ninja -C "out/$provider-provider" "order1886_$provider" >> out/gpu-build.log 2>&1; then
