@@ -508,11 +508,14 @@ GraphicsPipeline::GraphicsPipeline(
     auto [pipeline_result, pipe] =
         CreateCachedGraphicsPipeline(device, pipeline_cache, pipeline_info, key,
                                      instance.GetPipelineBinaryGlobalKey(), binary_directory);
-    if (preloading && pipeline_result == vk::Result::eErrorInitializationFailed) {
+    if (preloading && pipeline_result != vk::Result::eSuccess) {
         // A cached key is optional. Leave it unpublished so the normal draw
-        // path can reconstruct the pipeline from current guest state.
-        LOG_WARNING(Render_Vulkan, "Skipping a cached graphics pipeline the driver rejected: {}",
-                    debug_str);
+        // path can reconstruct the pipeline from current guest state; a driver
+        // that refuses any replay result (VK_ERROR_INITIALIZATION_FAILED,
+        // VK_PIPELINE_COMPILE_REQUIRED, ...) must not abort the boot.
+        LOG_WARNING(Render_Vulkan,
+                    "Skipping a cached graphics pipeline the driver rejected ({}): {}",
+                    vk::to_string(pipeline_result), debug_str);
         return;
     }
     ASSERT_MSG(pipeline_result == vk::Result::eSuccess, "Failed to create graphics pipeline: {}",

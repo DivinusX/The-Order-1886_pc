@@ -115,6 +115,14 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
     auto [pipeline_result, pipe] =
         CreateCachedComputePipeline(device, pipeline_cache, compute_pipeline_ci, compute_key_,
                                      instance.GetPipelineBinaryGlobalKey(), binary_directory);
+    if (preloading && pipeline_result != vk::Result::eSuccess) {
+        // Same rule as graphics warm-up: a rejected cache entry is optional and
+        // must never stop the game from starting.
+        LOG_WARNING(Render_Vulkan,
+                    "Skipping a cached compute pipeline the driver rejected ({}): {}",
+                    vk::to_string(pipeline_result), debug_str);
+        return;
+    }
     ASSERT_MSG(pipeline_result == vk::Result::eSuccess, "Failed to create compute pipeline: {}",
                vk::to_string(pipeline_result));
     pipeline = std::move(pipe);

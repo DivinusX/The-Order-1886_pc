@@ -760,6 +760,9 @@ bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
             auto pipeline = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap,
                                                               profile, *pipeline_cache, key, *snapshot,
                                                               module, sdata, true);
+            if (!pipeline->Handle()) {
+                return false;
+            }
             pipeline->PublishInfo(info);
             std::scoped_lock lock{warmup_results_mutex};
             warmup_compute.emplace_back(key, std::move(pipeline));
@@ -769,6 +772,10 @@ bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
         it.value() = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
                                                        *pipeline_cache, compute_key,
                                                        *sel.infos[0], sel.modules[0], sdata, true);
+        if (!it.value()->Handle()) {
+            compute_pipelines.erase(it);
+            return false;
+        }
     }
 
     sel.infos.fill(nullptr);
@@ -1093,8 +1100,8 @@ void PipelineCache::WarmUp(const std::function<void(u32, u32)>& progress) {
     LOG_INFO(Render, "Preloaded {} pipelines", num_pipelines);
     ReportPipelineBinaryCache();
     if (num_total_pipelines > num_pipelines) {
-        LOG_WARNING(Render, "{} stale pipelines were found. Consider re-generating the cache",
-                    num_total_pipelines - num_pipelines);
+        LOG_WARNING(Render, "{} cached pipelines were skipped; each one is rebuilt when the game "
+                    "next draws it", num_total_pipelines - num_pipelines);
     }
 
     Storage::DataBase::Instance().FinishPreload();
@@ -1402,6 +1409,9 @@ void PipelineCache::PumpWarmUp() {
                 built.compute = std::make_unique<ComputePipeline>(
                     instance, scheduler, desc_heap, profile, *pipeline_cache, compute_key,
                     *infos[0], modules[0], compute_data, true);
+                if (!built.compute->Handle()) {
+                    return false;
+                }
                 built.compute->PublishInfo(live_infos[0]);
             } else {
                 built.graphics = std::make_unique<GraphicsPipeline>(
