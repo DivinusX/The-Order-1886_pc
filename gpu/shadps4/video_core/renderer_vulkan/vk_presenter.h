@@ -48,8 +48,11 @@ struct Frame {
     VmaAllocation fg_hdr_alloc{};
     vk::Image fg_hdr{};
     vk::ImageView fg_hdr_view{};
+    VmaAllocation fg_pre_alloc{};
+    vk::Image fg_pre{};       ///< scene band-placed into frame space, pre-post-process (HDR)
+    vk::ImageView fg_pre_view{};
     VmaAllocation fg_display_alloc{};
-    vk::Image fg_display{};
+    vk::Image fg_display{};   ///< post-processed + HUD-reblitted generated frame, frame size
     vk::ImageView fg_display_view{};
     bool fg_valid{false};
 };

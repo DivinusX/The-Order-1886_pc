@@ -455,6 +455,8 @@ Presenter::~Presenter() {
         if (frame.fg_hdr) {
             device.destroyImageView(frame.fg_hdr_view);
             vmaDestroyImage(instance.GetAllocator(), frame.fg_hdr, frame.fg_hdr_alloc);
+            device.destroyImageView(frame.fg_pre_view);
+            vmaDestroyImage(instance.GetAllocator(), frame.fg_pre, frame.fg_pre_alloc);
             device.destroyImageView(frame.fg_display_view);
             vmaDestroyImage(instance.GetAllocator(), frame.fg_display, frame.fg_display_alloc);
         }
@@ -478,24 +480,30 @@ static constexpr float kFramegenHudRects[][4] = {
 };
 
 void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const SceneFrame& scene) {
+    static const bool step_trace = std::getenv("ORDER1886_FG_DUMP") != nullptr;
+    (void)step_trace;
+#define FGSTEP(fmt, ...) if (step_trace) std::fprintf(stderr, "FGstep " fmt "\n", ##__VA_ARGS__)
     const vk::Device device = instance.GetDevice();
     const u32 w = scene.width, h = scene.height;
     if ((fg_hdr_w != w || fg_hdr_h != h) && frame->fg_hdr) {
         device.destroyImageView(frame->fg_hdr_view);
         vmaDestroyImage(instance.GetAllocator(), frame->fg_hdr, frame->fg_hdr_alloc);
+        device.destroyImageView(frame->fg_pre_view);
+        vmaDestroyImage(instance.GetAllocator(), frame->fg_pre, frame->fg_pre_alloc);
         device.destroyImageView(frame->fg_display_view);
         vmaDestroyImage(instance.GetAllocator(), frame->fg_display, frame->fg_display_alloc);
         frame->fg_hdr = VK_NULL_HANDLE;
         frame->fg_display = VK_NULL_HANDLE;
         framegen_ctx_ready = false;
     }
-    if (!frame->fg_hdr) {
+    FGSTEP("staging");
+    if (!frame->fg_hdr || fg_hdr_w != w || fg_hdr_h != h) {
         const auto make = [&](vk::Format format, vk::ImageUsageFlags usage, vk::Image& image,
-                              VmaAllocation& alloc, vk::ImageView& view) {
+                              VmaAllocation& alloc, vk::ImageView& view, u32 iw, u32 ih) {
             const VkImageCreateInfo ci{.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                                        .imageType = VK_IMAGE_TYPE_2D,
                                        .format = static_cast<VkFormat>(format),
-                                       .extent = {w, h, 1},
+                                       .extent = {iw, ih, 1},
                                        .mipLevels = 1,
                                        .arrayLayers = 1,
                                        .samples = VK_SAMPLE_COUNT_1_BIT,
@@ -522,11 +530,16 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
         if (!make(vk::Format::eR16G16B16A16Sfloat,
                   vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
                       vk::ImageUsageFlagBits::eTransferSrc,
-                  frame->fg_hdr, frame->fg_hdr_alloc, frame->fg_hdr_view) ||
+                  frame->fg_hdr, frame->fg_hdr_alloc, frame->fg_hdr_view, w, h) ||
+            !make(vk::Format::eR16G16B16A16Sfloat,
+                  vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+                  frame->fg_pre, frame->fg_pre_alloc, frame->fg_pre_view, frame->width,
+                  frame->height) ||
             !make(frame->format,
                   vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferSrc |
                       vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
-                  frame->fg_display, frame->fg_display_alloc, frame->fg_display_view)) {
+                  frame->fg_display, frame->fg_display_alloc, frame->fg_display_view,
+                  frame->width, frame->height)) {
             framegen_ready = false;
             std::printf("FrameGen: staging allocation failed; feature off\n");
             std::fflush(stdout);
@@ -536,6 +549,7 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
         fg_hdr_h = h;
     }
     if (!framegen_ctx_ready) {
+        FGSTEP("ctxcreate");
         if (!framegen.Create(instance, w, h, w, h, false)) {
             if (++framegen_fail_streak > 8) {
                 framegen_ready = false;
@@ -563,6 +577,8 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
     };
     const bool first = fg_seq == 0;
     ++fg_seq;
+    FGSTEP("feed seq=%llu", (unsigned long long)fg_seq);
+    FGSTEP("predispatch");
     if (!framegen.PresentFrame(cmdbuf, fscene, frame->fg_hdr, w, h, fg_seq, first,
                                Presenter::CompletedPresentations())) {
         if (++framegen_fail_streak > 8) {
@@ -575,6 +591,59 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
         return;
     }
     framegen_fail_streak = 0;
+
+    // Band the scene (e.g. the 2.4:1 cinematic window) into frame space with black bars,
+    // exactly like the game composes its own letterbox, then post-process the frame-sized HDR.
+    const auto fit = FitImage(static_cast<s32>(w), static_cast<s32>(h),
+                              static_cast<s32>(frame->width), static_cast<s32>(frame->height));
+    {
+        const vk::ImageMemoryBarrier2 pre{
+            .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+            .dstAccessMask = vk::AccessFlags2{vk::AccessFlagBits2::eTransferWrite},
+            .oldLayout = vk::ImageLayout::eUndefined,
+            .newLayout = vk::ImageLayout::eTransferDstOptimal,
+            .image = frame->fg_pre,
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+        };
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &pre});
+        const vk::ClearColorValue black{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}};
+        cmdbuf.clearColorImage(frame->fg_pre, vk::ImageLayout::eTransferDstOptimal, black,
+                               vk::ImageSubresourceRange{.aspectMask = vk::ImageAspectFlagBits::eColor,
+                                                          .levelCount = 1,
+                                                          .layerCount = 1});
+        const vk::ImageMemoryBarrier2 hdr_to_src{
+            .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+            .srcAccessMask = vk::AccessFlags2{vk::AccessFlagBits2::eShaderWrite},
+            .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+            .dstAccessMask = vk::AccessFlags2{vk::AccessFlagBits2::eTransferRead},
+            .oldLayout = vk::ImageLayout::eGeneral,
+            .newLayout = vk::ImageLayout::eTransferSrcOptimal,
+            .image = frame->fg_hdr,
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+        };
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &hdr_to_src});
+        const vk::ImageBlit band{
+            .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+            .srcOffsets = {{vk::Offset3D{0, 0, 0}, vk::Offset3D{static_cast<s32>(w), static_cast<s32>(h), 1}}},
+            .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+            .dstOffsets = {{vk::Offset3D{fit.offset.x, fit.offset.y, 0},
+                           vk::Offset3D{fit.offset.x + static_cast<s32>(fit.extent.width),
+                                        fit.offset.y + static_cast<s32>(fit.extent.height), 1}}},
+        };
+        cmdbuf.blitImage(frame->fg_hdr, vk::ImageLayout::eTransferSrcOptimal, frame->fg_pre,
+                         vk::ImageLayout::eTransferDstOptimal, band, vk::Filter::eLinear);
+        const vk::ImageMemoryBarrier2 pre_to_read{
+            .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+            .srcAccessMask = vk::AccessFlags2{vk::AccessFlagBits2::eTransferWrite},
+            .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
+            .dstAccessMask = vk::AccessFlags2{vk::AccessFlagBits2::eShaderRead},
+            .oldLayout = vk::ImageLayout::eTransferDstOptimal,
+            .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+            .image = frame->fg_pre,
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+        };
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &pre_to_read});
+    }
 
     const vk::ImageSubresourceRange range{.aspectMask = vk::ImageAspectFlagBits::eColor,
                                           .levelCount = 1,
@@ -595,26 +664,28 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
     const auto rw = vk::AccessFlags2{vk::AccessFlagBits2::eShaderRead |
                                      vk::AccessFlagBits2::eShaderWrite};
     {
-        const std::array barriers{bar(frame->fg_hdr, vk::ImageLayout::eGeneral,
-                                      vk::ImageLayout::eShaderReadOnlyOptimal, {}, all, rw,
-                                      vk::PipelineStageFlagBits2::eFragmentShader),
-                                  bar(frame->fg_display, vk::ImageLayout::eUndefined,
-                                      vk::ImageLayout::eColorAttachmentOptimal, {}, {}, rw,
-                                      vk::PipelineStageFlagBits2::eColorAttachmentOutput)};
+        const std::array barriers{
+            bar(frame->fg_hdr, vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::eGeneral,
+                vk::AccessFlags2{vk::AccessFlagBits2::eTransferRead},
+                vk::PipelineStageFlagBits2::eTransfer, {}, all),
+            bar(frame->fg_display, vk::ImageLayout::eUndefined,
+                vk::ImageLayout::eColorAttachmentOptimal, {}, {}, rw,
+                vk::PipelineStageFlagBits2::eColorAttachmentOutput),
+        };
         cmdbuf.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 2,
                                                    .pImageMemoryBarriers = barriers.data()});
     }
+    FGSTEP("banddone");
     Frame shadow = *frame;
     shadow.image = frame->fg_display;
     shadow.image_view = frame->fg_display_view;
-    pp_pass.Render(cmdbuf, frame->fg_hdr_view, vk::Extent2D{w, h}, shadow, pp_settings);
+    pp_pass.Render(cmdbuf, frame->fg_pre_view,
+                   vk::Extent2D{frame->width, frame->height}, shadow, pp_settings);
     {
         const std::array barriers{
             bar(frame->fg_display, vk::ImageLayout::eColorAttachmentOptimal,
                 vk::ImageLayout::eGeneral, vk::AccessFlags2{vk::AccessFlagBits2::eColorAttachmentWrite},
                 vk::PipelineStageFlagBits2::eColorAttachmentOutput, {}, all),
-            bar(frame->fg_hdr, vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eGeneral,
-                {}, vk::PipelineStageFlagBits2::eFragmentShader, rw, all),
             bar(frame->image, vk::ImageLayout::eGeneral, vk::ImageLayout::eTransferSrcOptimal,
                 vk::AccessFlags2{vk::AccessFlagBits2::eColorAttachmentWrite},
                 vk::PipelineStageFlagBits2::eColorAttachmentOutput,
@@ -624,11 +695,15 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
                 {}, {}, vk::AccessFlags2{vk::AccessFlagBits2::eTransferWrite},
                 vk::PipelineStageFlagBits2::eTransfer),
         };
-        cmdbuf.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 4,
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 3,
                                                    .pImageMemoryBarriers = barriers.data()});
         for (const auto& r : kFramegenHudRects) {
-            const vk::Offset3D x0{static_cast<s32>(w * r[0]), static_cast<s32>(h * r[1]), 0};
-            const vk::Offset3D x1{static_cast<s32>(w * r[2]), static_cast<s32>(h * r[3]), 1};
+            // Rects are normalized in frame space; both images are frame-sized, so the copy
+            // is 1:1 - the HUD lands exactly where the game drew it.
+            const vk::Offset3D x0{static_cast<s32>(frame->width * r[0]),
+                                  static_cast<s32>(frame->height * r[1]), 0};
+            const vk::Offset3D x1{static_cast<s32>(frame->width * r[2]),
+                                  static_cast<s32>(frame->height * r[3]), 1};
             const vk::ImageBlit region{
                 .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
                 .srcOffsets = {{x0, x1}},
@@ -653,12 +728,13 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
         static int fg_dump_index = 0;
         if (fg_dump_index < 24) { // a short burst is enough for the numeric sanity check
             DumpRaw(instance, draw_scheduler, cmdbuf, frame->fg_display,
-                    vk::ImageLayout::eGeneral, w, h, fg_dump, fg_dump_index);
+                    vk::ImageLayout::eGeneral, w, h, "fgframe", fg_dump_index);
             DumpRaw(instance, draw_scheduler, cmdbuf, frame->image, vk::ImageLayout::eGeneral, w,
-                    h, "real", fg_dump_index);
+                    h, "realframe", fg_dump_index);
             ++fg_dump_index;
         }
     }
+    FGSTEP("hudcopied");
     frame->fg_valid = true;
 }
 
@@ -1085,8 +1161,7 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
                            (fg_now - fg_last_flip) * 5 > slot * 7; // >1.4 vblank slots
         if (paced) {
             SceneFrame scene{};
-            if (ConsumeSceneFrame(fg_scene_revision, scene) && scene.width == frame->width &&
-                scene.height == frame->height) {
+            if (ConsumeSceneFrame(fg_scene_revision, scene)) {
                 FramegenRecord(frame, cmdbuf, scene);
             }
         }
