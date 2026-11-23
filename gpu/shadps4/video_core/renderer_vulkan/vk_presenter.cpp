@@ -554,7 +554,11 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
     }
     if (!framegen_ctx_ready) {
         FGSTEP("ctxcreate");
-        if (!framegen.Create(instance, w, h, w, h, false)) {
+        // Recreate, not Create: after a cinematic->gameplay size change an old context
+        // still exists at the previous resolution, and Create would happily return it -
+        // feeding 1080p scenes into an 800-line context exhausted device memory (#47).
+        framegen.Recreate(instance, w, h, w, h, false);
+        if (!framegen.available() || !framegen.has_context()) {
             if (++framegen_fail_streak > 8) {
                 framegen_ready = false;
                 std::printf("FrameGen: provider create failed; feature off\n");

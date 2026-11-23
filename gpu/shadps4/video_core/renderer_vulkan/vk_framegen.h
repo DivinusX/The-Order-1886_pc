@@ -33,6 +33,7 @@ public:
     // why; the caller leaves the game's own presentation untouched.
     void Load();
     bool available() const { return api_ != nullptr; }
+    bool has_context() const { return context_ != nullptr; }
     const std::string& reason() const { return reason_; }
 
     // One-time context for a max render size and a fixed display size. Recreate() after a swapchain
