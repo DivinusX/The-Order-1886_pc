@@ -12,6 +12,7 @@
 #include "video_core/renderer_vulkan/ui_composition.h"
 #include "ps4_toggles.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
+#include "video_core/renderer_vulkan/order1886_cb_capture.h"
 #include "video_core/renderer_vulkan/vk_pass_census.h"
 #include "common/debug.h"
 #include "core/debug_state.h"
@@ -511,6 +512,10 @@ void Rasterizer::CollectRingBindings(const Shader::Info& stage, const PreparedDr
             std::memcpy(dst, source, size);
         } else {
             memory->CopySparseMemory(address, dst, size);
+        }
+        if (OrderCapture::Sink()) {
+            OrderCapture::ConstantBuffer(static_cast<int>(stage.hw_stage), index,
+                                         static_cast<std::uint64_t>(address), dst, size);
         }
         constant_ring->Flush(*offset, size);
         out.push_back({index, static_cast<u32>(size), *offset, address});
