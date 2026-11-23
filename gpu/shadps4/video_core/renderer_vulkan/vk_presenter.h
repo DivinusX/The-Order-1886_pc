@@ -165,6 +165,8 @@ private:
     u64 fg_scene_revision{0};
     u64 fg_seq{0};
     u64 fg_presented{0};
+    u64 real_presented{0};  ///< swapchain presents of real frames (#47 rate check)
+    std::chrono::steady_clock::time_point fg_started{std::chrono::steady_clock::now()};
     u32 fg_hdr_w{0};
     u32 fg_hdr_h{0};
     std::chrono::steady_clock::time_point fg_last_flip{};

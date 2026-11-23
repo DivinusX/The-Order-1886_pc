@@ -876,8 +876,13 @@ void Presenter::PresentGenerated(Frame& frame, const vk::Extent2D& extent) {
         swapchain.Present();
     }
     if (++fg_presented % 600 == 0) {
-        std::printf("FrameGen: %llu generated presents issued\n",
-                    static_cast<unsigned long long>(fg_presented));
+        const double secs = std::max(
+            0.001, std::chrono::duration<double>(std::chrono::steady_clock::now() - fg_started)
+                            .count());
+        std::printf("FrameGen: %llu generated presents issued - real %.1f/s + generated %.1f/s "
+                    "over %.0fs\n",
+                    static_cast<unsigned long long>(fg_presented), double(real_presented) / secs,
+                    double(fg_presented) / secs, secs);
         std::fflush(stdout);
     }
     framegen.Retire(fg_seq);
@@ -1543,7 +1548,10 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
             swapchain.Recreate(window.GetWidth(), window.GetHeight());
         }
     }
-    if (presented) Ps4Overlay::OnPresented(false);
+    if (presented) {
+        ++real_presented;
+        Ps4Overlay::OnPresented(false);
+    }
 
     // #47: the generated frame displays in the vblank slot after the real one (FIFO paces
     // it); cycle B is submitted on the same queue after cycle A, which already waited the
