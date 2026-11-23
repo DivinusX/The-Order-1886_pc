@@ -51,8 +51,10 @@ SCRIPTS = (
     'order1886_input.py', 'order1886_frame_trace.py', 'order1886_perf_report.py',
     # order1886.py imports this by name from the shipped scripts/ directory.
     'order1886_patches.py', 'order1886_editions.py',
-    # The Button prompts option builds its artwork from the player's game files.
+    # The Button prompts option builds its artwork from the player's own game files.
     'order1886_prompts.py', 'order1886_glyph_mod.py', 'order1886_ui_extract.py',
+    # The prompt build names this repair for dumps whose 1.02 update sits beside the base tree.
+    'order1886_merge_update.py',
 )
 
 

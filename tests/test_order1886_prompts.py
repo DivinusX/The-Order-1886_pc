@@ -48,11 +48,8 @@ class PromptPlanTests(unittest.TestCase):
         self.assertEqual(prompts.plan('keyboard')['InteractApp-34c664-78']['glyph'], 'left_stick')
         marks = {p.stem for p in (prompts.ASSETS / 'marks').glob('*.png')}
         self.assertTrue(set(prompts.XBOX.values()) <= marks)
-        needed = {label for label in prompts.KEYS.values() if label not in prompts.DRAWN_KEYS}
-        self.assertTrue(needed <= marks)
-        drawings = {p.stem for p in (prompts.ASSETS / 'keyboard').glob('*.png')}
-        self.assertTrue(set(prompts.DRAWN_KEYS.values()) | {'key-square', 'key-wide', 'mouse-left',
-                        'mouse-right', 'mouse-move', 'wasd'} <= drawings)
+        # The keyboard set needs no art: keycaps, mouse and WASD are drawn at build time.
+        self.assertFalse((prompts.ASSETS / 'keyboard').exists())
 
     def test_keyboard_preset_is_a_valid_binding_map_matching_the_keycaps(self):
         preset = prompts.keyboard_bindings()
@@ -60,7 +57,7 @@ class PromptPlanTests(unittest.TestCase):
         self.assertEqual(preset['cross'], 'Space')
         self.assertEqual(preset['options'], 'Escape')
         self.assertEqual((preset['right'], preset['left'], preset['down'], preset['up']), ('1', '2', '5', '6'))
-        self.assertEqual(prompts.KEYS['dpad_right'], '1')
+        self.assertEqual(prompts.keyboard_labels()['dpad_right'], '1')
 
     def test_playstation_builds_nothing_and_unknown_sets_are_refused(self):
         with tempfile.TemporaryDirectory() as state:
@@ -92,14 +89,16 @@ class CompositionTests(unittest.TestCase):
 
     def test_keyboard_draws_keys_at_the_original_size_and_clears_menu_discs(self):
         source = disc_with_cross()
-        drawn = prompts.keyboard(entry(), source)
+        labels = prompts.keyboard_labels()
+        drawn = prompts.keyboard(entry(), source, labels)
         self.assertEqual(drawn.size, source.size)
         self.assertIsNotNone(drawn.getchannel('A').getbbox())
-        backing = prompts.keyboard(entry(key='MenuApp-4-288', id=288), source)
+        backing = prompts.keyboard(entry(key='MenuApp-4-288', id=288), source, labels)
         self.assertIsNone(backing.getchannel('A').getbbox())
         for glyph in ('r2', 'l2', 'left_stick', 'right_stick', 'dpad_up_down', 'options'):
             with self.subTest(glyph=glyph):
-                self.assertEqual(prompts.keyboard(entry(glyph=glyph, static=False), source).size, source.size)
+                self.assertEqual(prompts.keyboard(entry(glyph=glyph, static=False), source, labels).size,
+                                 source.size)
 
 
 class OverlayTests(unittest.TestCase):
