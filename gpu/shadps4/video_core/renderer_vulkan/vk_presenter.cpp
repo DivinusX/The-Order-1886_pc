@@ -833,11 +833,10 @@ void Presenter::PresentGenerated(Frame& frame, const vk::Extent2D& extent) {
     const vk::ImageSubresourceRange range{.aspectMask = vk::ImageAspectFlagBits::eColor,
                                           .levelCount = 1,
                                           .layerCount = 1};
-    const bool band = UltrawideActive(float(frame.width) / float(std::max(frame.height, 1u)));
-    const auto blit = band ? MakeImageBlitBand(frame.width, frame.height, s32(extent.width),
-                                              s32(extent.height))
-                           : MakeImageBlit(frame.width, frame.height, extent.width, extent.height,
-                                           0, 0);
+    // fg_display is already the fully composited frame (the band and its letterbox were
+    // applied during recording), so this present is a plain frame-to-surface fit - unlike
+    // the real present, which bands the raw render frame itself.
+    const auto blit = MakeImageBlit(frame.width, frame.height, extent.width, extent.height, 0, 0);
     {
         const std::array barriers{
             vk::ImageMemoryBarrier2{.dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
@@ -859,6 +858,15 @@ void Presenter::PresentGenerated(Frame& frame, const vk::Extent2D& extent) {
                                                    .pImageMemoryBarriers = barriers.data()});
         cmdbuf.blitImage(frame.fg_display, vk::ImageLayout::eTransferSrcOptimal, swapchain_image,
                          vk::ImageLayout::eTransferDstOptimal, blit, vk::Filter::eLinear);
+        if (std::getenv("ORDER1886_FG_DUMP")) { // swapgen: what the surface actually receives
+            static int swapgen_index = 0;
+            if (swapgen_index % 400 < 12) {
+                DumpRaw(instance, present_scheduler, cmdbuf, swapchain_image,
+                        vk::ImageLayout::eTransferDstOptimal, extent.width, extent.height,
+                        "swapgen", swapgen_index % 400);
+            }
+            ++swapgen_index;
+        }
         const vk::ImageMemoryBarrier2 done{
             .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
             .srcAccessMask = vk::AccessFlags2{vk::AccessFlagBits2::eTransferRead},
@@ -904,7 +912,10 @@ void Presenter::PresentGenerated(Frame& frame, const vk::Extent2D& extent) {
         }
     }
     SubmitInfo info{};
-    info.AddWait(swapchain.GetImageAcquiredSemaphore());
+    // The binary acquired semaphore was consumed by the real present this cycle; the
+    // generated frame must instead wait on the draw timeline - fg_display's HUD regions are
+    // written there, and without this wait the present queue raced it (black rectangles).
+    info.AddWait(frame.ready_semaphore, frame.ready_tick);
     info.AddSignal(swapchain.GetPresentReadySemaphore());
     scheduler.Flush(info);
     {
