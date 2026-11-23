@@ -531,15 +531,18 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
                  .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}}));
             return true;
         };
-        if (!make(frame->format,
+        // FSR 3 frame generation insists on float scene colour, so the LDR band travels in
+        // an RGBA16F container (the crop blit converts; values stay in 0..1).
+        const auto hdr_f = vk::Format::eR16G16B16A16Sfloat;
+        if (!make(hdr_f,
                   vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled |
                       vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc,
                   frame->fg_ldr, frame->fg_ldr_alloc, frame->fg_ldr_view, w, h) ||
-            !make(frame->format,
+            !make(hdr_f,
                   vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
                       vk::ImageUsageFlagBits::eTransferSrc,
                   frame->fg_hdr, frame->fg_hdr_alloc, frame->fg_hdr_view, w, h) ||
-            !make(frame->format,
+            !make(hdr_f,
                   vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
                   frame->fg_pre, frame->fg_pre_alloc, frame->fg_pre_view, frame->width,
                   frame->height) ||
@@ -558,8 +561,7 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
     }
     if (!framegen_ctx_ready) {
         FGSTEP("ctxcreate");
-        if (!framegen.Create(instance, w, h, w, h, false,
-                             static_cast<VkFormat>(frame->format))) {
+        if (!framegen.Create(instance, w, h, w, h, false)) {
             if (++framegen_fail_streak > 8) {
                 framegen_ready = false;
                 std::printf("FrameGen: provider create failed; feature off\n");
@@ -639,7 +641,7 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
         .color = frame->fg_ldr,
         .depth = scene.depth,
         .motion = scene.motion,
-        .color_format = static_cast<VkFormat>(frame->format),
+        .color_format = VK_FORMAT_R16G16B16A16_SFLOAT,
         .width = scene.width,
         .height = scene.height,
         .frame_ms = scene.frame_ms,
@@ -662,6 +664,13 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
     }
     framegen_fail_streak = 0;
 
+    if (step_trace) {
+        const u32 di = static_cast<u32>(fg_seq);
+        DumpRaw(instance, draw_scheduler, cmdbuf, frame->fg_ldr, vk::ImageLayout::eGeneral, w, h,
+                "fgldr", di);
+        DumpRaw(instance, draw_scheduler, cmdbuf, frame->fg_hdr, vk::ImageLayout::eGeneral, w, h,
+                "fghdr", di);
+    }
     // Band the scene (e.g. the 2.4:1 cinematic window) into frame space with black bars,
     // exactly like the game composes its own letterbox, then post-process the frame-sized HDR.
     const auto fit = FitImage(static_cast<s32>(w), static_cast<s32>(h),
@@ -796,7 +805,13 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
     }
     if (const char* fg_dump = std::getenv("ORDER1886_FG_DUMP"); fg_dump && *fg_dump) {
         static int fg_dump_index = 0;
-        if (fg_dump_index < 24) { // a short burst is enough for the numeric sanity check
+        // Burst window: dumps stall the queue, so sample a short slice - by default late
+        // enough to land in real gameplay once the title/cinematic part has passed.
+        static const int dump_from = [] {
+            const char* v = std::getenv("ORDER1886_FG_DUMP_FROM");
+            return v && *v ? std::atoi(v) : 120;
+        }();
+        if (fg_dump_index >= dump_from && fg_dump_index < dump_from + 24) {
             DumpRaw(instance, draw_scheduler, cmdbuf, frame->fg_display,
                     vk::ImageLayout::eGeneral, frame->width, frame->height, "fgframe",
                     fg_dump_index);
