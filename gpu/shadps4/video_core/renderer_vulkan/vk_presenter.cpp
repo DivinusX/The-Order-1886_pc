@@ -1218,7 +1218,35 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         // session present-storm until the device ran out of memory).
         const bool paced = fg_last_flip.time_since_epoch().count() == 0 ||
                            (fg_now - fg_last_flip) * 10 > slot * 19;
-        if (paced) {
+        // Headroom governor: frame generation is only worth having while the game still
+        // holds its own target. Measured here: 60 FPS + FG on an RTX 5050 laptop slid the
+        // real rate to 41/s - the interpolator's cost sank the very frames it doubled.
+        // The EMA of the game's frame interval must stay under 1.10x target to generate,
+        // and only recovers to generating below 0.95x (hysteresis, ~2 s to settle).
+        static double fg_interval_ema = 0.0;
+        static bool fg_throttled = false;
+        if (fg_last_flip.time_since_epoch().count() != 0) {
+            const double dt = std::chrono::duration<double>(fg_now - fg_last_flip).count();
+            if (dt < 0.5) {
+                fg_interval_ema = fg_interval_ema > 0 ? fg_interval_ema * 0.97 + dt * 0.03 : dt;
+            }
+        }
+        const u32 target_fps = Ps4Settings::Get().fps_limit.load();
+        const double target_interval = 1.0 / (target_fps > 0 ? target_fps : 30);
+        if (fg_interval_ema > 0) {
+            if (!fg_throttled && fg_interval_ema > target_interval * 1.10) {
+                fg_throttled = true;
+                std::printf("FrameGen: game below target FPS (%.0f/s) - generation paused "
+                            "until it recovers\n",
+                            1.0 / std::max(0.001, fg_interval_ema));
+                std::fflush(stdout);
+            } else if (fg_throttled && fg_interval_ema < target_interval * 0.95) {
+                fg_throttled = false;
+                std::printf("FrameGen: game holds target again - generation resumed\n");
+                std::fflush(stdout);
+            }
+        }
+        if (paced && !fg_throttled) {
             SceneFrame scene{};
             if (ConsumeSceneFrame(fg_scene_revision, scene)) {
                 FramegenRecord(frame, cmdbuf, scene);
