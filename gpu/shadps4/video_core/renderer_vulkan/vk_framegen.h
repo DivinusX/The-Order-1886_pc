@@ -43,11 +43,15 @@ public:
                   u32 display_h, bool hdr_scrgb);
     void Destroy();
     bool active() const { return context_ != nullptr; }
+    std::string name() const { return api_ && api_->name ? api_->name : "order1886-fg"; }
+    std::string version() const { return api_ && api_->version ? api_->version : "?"; }
 
     // Record one guest frame: latch the scene, then emit the interpolated frame into `out`
     // (display size, GENERAL, distinct from the scene images). `reset` clears SDK history (scene
     // change / first frame). `gpu_frames_completed` is the present-fence watermark for retirement.
-    void PresentFrame(vk::CommandBuffer cmdbuf, const FramegenScene& scene, vk::Image out,
+    // false when the provider refused the frame; the caller must stop feeding and reset the
+    // history before trying again (a rejected prepare leaves the SDK state wedged).
+    bool PresentFrame(vk::CommandBuffer cmdbuf, const FramegenScene& scene, vk::Image out,
                       u32 out_w, u32 out_h, u64 frame_id, bool reset,
                       u64 gpu_frames_completed);
     // Release SDK history older than the host-proven present watermark.

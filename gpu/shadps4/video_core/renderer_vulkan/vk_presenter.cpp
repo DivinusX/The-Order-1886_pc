@@ -17,6 +17,7 @@
 #include "ps4_graphics.h"
 #include "video_core/renderer_vulkan/vk_temporal_upscaler.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
+#include "video_core/renderer_vulkan/vk_order_resolve.h"
 #include "video_core/renderer_vulkan/vk_upscale_providers.h"
 #include "video_core/renderer_vulkan/vk_warmup_inbox.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
@@ -350,6 +351,21 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
     const u32 num_images = swapchain.GetImageCount();
     const vk::Device device = instance.GetDevice();
 
+    // #47: frame generation decided at startup (the pool and context size around it).
+    framegen_wanted = Ps4Settings::Get().frame_generation.load();
+    if (framegen_wanted) {
+        framegen.Load();
+        framegen_ready = framegen.available();
+        if (!framegen_ready) {
+            std::printf("FrameGen: %s; presenting game frames only\n", framegen.reason().c_str());
+            std::fflush(stdout);
+        } else {
+            std::printf("FrameGen: provider %s %s armed\n", framegen.name().c_str(),
+                        framegen.version().c_str());
+            std::fflush(stdout);
+        }
+    }
+
     // Create presentation frames.
     present_frames.resize(num_images);
     for (u32 i = 0; i < num_images; i++) {
@@ -436,8 +452,316 @@ Presenter::~Presenter() {
     for (auto& frame : present_frames) {
         vmaDestroyImage(instance.GetAllocator(), frame.image, frame.allocation);
         device.destroyImageView(frame.image_view);
+        if (frame.fg_hdr) {
+            device.destroyImageView(frame.fg_hdr_view);
+            vmaDestroyImage(instance.GetAllocator(), frame.fg_hdr, frame.fg_hdr_alloc);
+            device.destroyImageView(frame.fg_display_view);
+            vmaDestroyImage(instance.GetAllocator(), frame.fg_display, frame.fg_display_alloc);
+        }
         device.destroyFence(frame.present_done);
     }
+    framegen.Destroy();
+}
+
+static void DumpRaw(const Instance& instance, Scheduler& scheduler, vk::CommandBuffer cmdbuf,
+                    vk::Image image, vk::ImageLayout layout, u32 w, u32 h, const char* name,
+                    int index);
+
+// #47: HUD regions re-blitted from the real frame onto the generated one (normalized
+// display coords; reticle, subtitle/QTE band, weapon HUD, objective, top prompts).
+static constexpr float kFramegenHudRects[][4] = {
+    {0.46f, 0.46f, 0.54f, 0.54f},
+    {0.00f, 0.70f, 1.00f, 0.86f},
+    {0.62f, 0.78f, 1.00f, 1.00f},
+    {0.00f, 0.10f, 0.30f, 0.26f},
+    {0.36f, 0.06f, 0.64f, 0.20f},
+};
+
+void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const SceneFrame& scene) {
+    const vk::Device device = instance.GetDevice();
+    const u32 w = scene.width, h = scene.height;
+    if ((fg_hdr_w != w || fg_hdr_h != h) && frame->fg_hdr) {
+        device.destroyImageView(frame->fg_hdr_view);
+        vmaDestroyImage(instance.GetAllocator(), frame->fg_hdr, frame->fg_hdr_alloc);
+        device.destroyImageView(frame->fg_display_view);
+        vmaDestroyImage(instance.GetAllocator(), frame->fg_display, frame->fg_display_alloc);
+        frame->fg_hdr = VK_NULL_HANDLE;
+        frame->fg_display = VK_NULL_HANDLE;
+        framegen_ctx_ready = false;
+    }
+    if (!frame->fg_hdr) {
+        const auto make = [&](vk::Format format, vk::ImageUsageFlags usage, vk::Image& image,
+                              VmaAllocation& alloc, vk::ImageView& view) {
+            const VkImageCreateInfo ci{.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                                       .imageType = VK_IMAGE_TYPE_2D,
+                                       .format = static_cast<VkFormat>(format),
+                                       .extent = {w, h, 1},
+                                       .mipLevels = 1,
+                                       .arrayLayers = 1,
+                                       .samples = VK_SAMPLE_COUNT_1_BIT,
+                                       .tiling = VK_IMAGE_TILING_OPTIMAL,
+                                       .usage = static_cast<VkImageUsageFlags>(usage),
+                                       .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
+            const VmaAllocationCreateInfo ai{.flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT,
+                                             .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+            VkImage raw{};
+            VmaAllocation raw_mem{};
+            if (vmaCreateImage(instance.GetAllocator(), &ci, &ai, &raw, &raw_mem, nullptr) !=
+                VK_SUCCESS) {
+                return false;
+            }
+            image = vk::Image{raw};
+            alloc = raw_mem;
+            view = Check<"framegen view">(device.createImageView(
+                {.image = image,
+                 .viewType = vk::ImageViewType::e2D,
+                 .format = format,
+                 .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}}));
+            return true;
+        };
+        if (!make(vk::Format::eR16G16B16A16Sfloat,
+                  vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
+                      vk::ImageUsageFlagBits::eTransferSrc,
+                  frame->fg_hdr, frame->fg_hdr_alloc, frame->fg_hdr_view) ||
+            !make(frame->format,
+                  vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferSrc |
+                      vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+                  frame->fg_display, frame->fg_display_alloc, frame->fg_display_view)) {
+            framegen_ready = false;
+            std::printf("FrameGen: staging allocation failed; feature off\n");
+            std::fflush(stdout);
+            return;
+        }
+        fg_hdr_w = w;
+        fg_hdr_h = h;
+    }
+    if (!framegen_ctx_ready) {
+        if (!framegen.Create(instance, w, h, w, h, false)) {
+            if (++framegen_fail_streak > 8) {
+                framegen_ready = false;
+                std::printf("FrameGen: provider create failed; feature off\n");
+                std::fflush(stdout);
+            }
+            return;
+        }
+        framegen_ctx_ready = true;
+        fg_seq = 0;
+        std::printf("FrameGen: generating at %ux%u (v0 requires output size == scene size)\n", w,
+                    h);
+        std::fflush(stdout);
+    }
+
+    FramegenScene fscene{
+        .color = scene.color,
+        .depth = scene.depth,
+        .motion = scene.motion,
+        .color_format = VK_FORMAT_R16G16B16A16_SFLOAT,
+        .width = scene.width,
+        .height = scene.height,
+        .frame_ms = scene.frame_ms,
+        .depth_reversed = scene.depth_reversed,
+    };
+    const bool first = fg_seq == 0;
+    ++fg_seq;
+    if (!framegen.PresentFrame(cmdbuf, fscene, frame->fg_hdr, w, h, fg_seq, first,
+                               Presenter::CompletedPresentations())) {
+        if (++framegen_fail_streak > 8) {
+            framegen_ready = false;
+            std::printf("FrameGen: provider failures; feature off\n");
+            std::fflush(stdout);
+        } else {
+            fg_seq = 0; // force a history reset on the next attempt
+        }
+        return;
+    }
+    framegen_fail_streak = 0;
+
+    const vk::ImageSubresourceRange range{.aspectMask = vk::ImageAspectFlagBits::eColor,
+                                          .levelCount = 1,
+                                          .layerCount = 1};
+    const auto bar = [](vk::Image image, vk::ImageLayout from, vk::ImageLayout to,
+                        vk::AccessFlags2 src, vk::PipelineStageFlags2 src_stage,
+                        vk::AccessFlags2 dst, vk::PipelineStageFlags2 dst_stage) {
+        return vk::ImageMemoryBarrier2{.srcStageMask = src_stage,
+                                       .srcAccessMask = src,
+                                       .dstStageMask = dst_stage,
+                                       .dstAccessMask = dst,
+                                       .oldLayout = from,
+                                       .newLayout = to,
+                                       .image = image,
+                                       .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
+    };
+    const auto all = vk::PipelineStageFlagBits2::eAllCommands;
+    const auto rw = vk::AccessFlags2{vk::AccessFlagBits2::eShaderRead |
+                                     vk::AccessFlagBits2::eShaderWrite};
+    {
+        const std::array barriers{bar(frame->fg_hdr, vk::ImageLayout::eGeneral,
+                                      vk::ImageLayout::eShaderReadOnlyOptimal, {}, all, rw,
+                                      vk::PipelineStageFlagBits2::eFragmentShader),
+                                  bar(frame->fg_display, vk::ImageLayout::eUndefined,
+                                      vk::ImageLayout::eColorAttachmentOptimal, {}, {}, rw,
+                                      vk::PipelineStageFlagBits2::eColorAttachmentOutput)};
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 2,
+                                                   .pImageMemoryBarriers = barriers.data()});
+    }
+    Frame shadow = *frame;
+    shadow.image = frame->fg_display;
+    shadow.image_view = frame->fg_display_view;
+    pp_pass.Render(cmdbuf, frame->fg_hdr_view, vk::Extent2D{w, h}, shadow, pp_settings);
+    {
+        const std::array barriers{
+            bar(frame->fg_display, vk::ImageLayout::eColorAttachmentOptimal,
+                vk::ImageLayout::eGeneral, vk::AccessFlags2{vk::AccessFlagBits2::eColorAttachmentWrite},
+                vk::PipelineStageFlagBits2::eColorAttachmentOutput, {}, all),
+            bar(frame->fg_hdr, vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eGeneral,
+                {}, vk::PipelineStageFlagBits2::eFragmentShader, rw, all),
+            bar(frame->image, vk::ImageLayout::eGeneral, vk::ImageLayout::eTransferSrcOptimal,
+                vk::AccessFlags2{vk::AccessFlagBits2::eColorAttachmentWrite},
+                vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                vk::AccessFlags2{vk::AccessFlagBits2::eTransferRead},
+                vk::PipelineStageFlagBits2::eTransfer),
+            bar(frame->fg_display, vk::ImageLayout::eGeneral, vk::ImageLayout::eTransferDstOptimal,
+                {}, {}, vk::AccessFlags2{vk::AccessFlagBits2::eTransferWrite},
+                vk::PipelineStageFlagBits2::eTransfer),
+        };
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 4,
+                                                   .pImageMemoryBarriers = barriers.data()});
+        for (const auto& r : kFramegenHudRects) {
+            const vk::Offset3D x0{static_cast<s32>(w * r[0]), static_cast<s32>(h * r[1]), 0};
+            const vk::Offset3D x1{static_cast<s32>(w * r[2]), static_cast<s32>(h * r[3]), 1};
+            const vk::ImageBlit region{
+                .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+                .srcOffsets = {{x0, x1}},
+                .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+                .dstOffsets = {{x0, x1}},
+            };
+            cmdbuf.blitImage(frame->image, vk::ImageLayout::eTransferSrcOptimal, frame->fg_display,
+                             vk::ImageLayout::eTransferDstOptimal, region, vk::Filter::eNearest);
+        }
+        const std::array restore{
+            bar(frame->image, vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::eGeneral,
+                vk::AccessFlags2{vk::AccessFlagBits2::eTransferRead},
+                vk::PipelineStageFlagBits2::eTransfer, {}, all),
+            bar(frame->fg_display, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eGeneral,
+                vk::AccessFlags2{vk::AccessFlagBits2::eTransferWrite},
+                vk::PipelineStageFlagBits2::eTransfer, {}, all),
+        };
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 2,
+                                                   .pImageMemoryBarriers = restore.data()});
+    }
+    if (const char* fg_dump = std::getenv("ORDER1886_FG_DUMP"); fg_dump && *fg_dump) {
+        static int fg_dump_index = 0;
+        if (fg_dump_index < 24) { // a short burst is enough for the numeric sanity check
+            DumpRaw(instance, draw_scheduler, cmdbuf, frame->fg_display,
+                    vk::ImageLayout::eGeneral, w, h, fg_dump, fg_dump_index);
+            DumpRaw(instance, draw_scheduler, cmdbuf, frame->image, vk::ImageLayout::eGeneral, w,
+                    h, "real", fg_dump_index);
+            ++fg_dump_index;
+        }
+    }
+    frame->fg_valid = true;
+}
+
+void Presenter::PresentGenerated(Frame& frame, const vk::Extent2D& extent) {
+    if (extent.width == 0 || extent.height == 0) {
+        return;
+    }
+    if (!swapchain.AcquireNextImage()) {
+        swapchain.Recreate(window.GetWidth(), window.GetHeight());
+        if (!swapchain.AcquireNextImage()) {
+            return; // the real frame showed; skipping the generated one is safe
+        }
+    }
+    const vk::Image swapchain_image = swapchain.Image();
+    auto& scheduler = present_scheduler;
+    const auto cmdbuf = scheduler.CommandBuffer();
+    const vk::ImageSubresourceRange range{.aspectMask = vk::ImageAspectFlagBits::eColor,
+                                          .levelCount = 1,
+                                          .layerCount = 1};
+    const bool band = UltrawideActive(float(frame.width) / float(std::max(frame.height, 1u)));
+    const auto blit = band ? MakeImageBlitBand(frame.width, frame.height, s32(extent.width),
+                                              s32(extent.height))
+                           : MakeImageBlit(frame.width, frame.height, extent.width, extent.height,
+                                           0, 0);
+    {
+        const std::array barriers{
+            vk::ImageMemoryBarrier2{.dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+                                    .dstAccessMask = vk::AccessFlags2{vk::AccessFlagBits2::eTransferWrite},
+                                    .oldLayout = vk::ImageLayout::eUndefined,
+                                    .newLayout = vk::ImageLayout::eTransferDstOptimal,
+                                    .image = swapchain_image,
+                                    .subresourceRange = range},
+            vk::ImageMemoryBarrier2{.srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+                                    .srcAccessMask = vk::AccessFlags2{vk::AccessFlagBits2::eMemoryWrite},
+                                    .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+                                    .dstAccessMask = vk::AccessFlags2{vk::AccessFlagBits2::eTransferRead},
+                                    .oldLayout = vk::ImageLayout::eGeneral,
+                                    .newLayout = vk::ImageLayout::eTransferSrcOptimal,
+                                    .image = frame.fg_display,
+                                    .subresourceRange = range},
+        };
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 2,
+                                                   .pImageMemoryBarriers = barriers.data()});
+        cmdbuf.blitImage(frame.fg_display, vk::ImageLayout::eTransferSrcOptimal, swapchain_image,
+                         vk::ImageLayout::eTransferDstOptimal, blit, vk::Filter::eLinear);
+        const vk::ImageMemoryBarrier2 done{
+            .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+            .srcAccessMask = vk::AccessFlags2{vk::AccessFlagBits2::eTransferRead},
+            .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+            .oldLayout = vk::ImageLayout::eTransferSrcOptimal,
+            .newLayout = vk::ImageLayout::eGeneral,
+            .image = frame.fg_display,
+            .subresourceRange = range,
+        };
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 1,
+                                                   .pImageMemoryBarriers = &done});
+    }
+    const bool overlay = Ps4Overlay::Visible();
+    {
+        const vk::ImageMemoryBarrier2 to_next{
+            .srcAccessMask = vk::AccessFlags2{vk::AccessFlagBits2::eTransferWrite},
+            .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+            .dstAccessMask = overlay
+                                ? vk::AccessFlags2{vk::AccessFlagBits2::eColorAttachmentRead |
+                                                  vk::AccessFlagBits2::eColorAttachmentWrite}
+                                : vk::AccessFlags2{},
+            .oldLayout = vk::ImageLayout::eTransferDstOptimal,
+            .newLayout = overlay ? vk::ImageLayout::eColorAttachmentOptimal
+                                 : vk::ImageLayout::ePresentSrcKHR,
+            .image = swapchain_image,
+            .subresourceRange = range,
+        };
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 1,
+                                                   .pImageMemoryBarriers = &to_next});
+        if (overlay) {
+            Ps4Overlay::Render(cmdbuf, swapchain.ImageView(), extent);
+            const vk::ImageMemoryBarrier2 to_present{
+                .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                .srcAccessMask = vk::AccessFlags2{vk::AccessFlagBits2::eColorAttachmentWrite},
+                .dstStageMask = vk::PipelineStageFlagBits2::eBottomOfPipe,
+                .oldLayout = vk::ImageLayout::eColorAttachmentOptimal,
+                .newLayout = vk::ImageLayout::ePresentSrcKHR,
+                .image = swapchain_image,
+                .subresourceRange = range,
+            };
+            cmdbuf.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 1,
+                                                       .pImageMemoryBarriers = &to_present});
+        }
+    }
+    SubmitInfo info{};
+    info.AddWait(swapchain.GetImageAcquiredSemaphore());
+    info.AddSignal(swapchain.GetPresentReadySemaphore());
+    scheduler.Flush(info);
+    {
+        std::scoped_lock submit_lock{Scheduler::submit_mutex};
+        swapchain.Present();
+    }
+    if (++fg_presented % 600 == 0) {
+        std::printf("FrameGen: %llu generated presents issued\n",
+                    static_cast<unsigned long long>(fg_presented));
+        std::fflush(stdout);
+    }
+    framegen.Retire(fg_seq);
 }
 
 bool Presenter::IsVideoOutSurface(const AmdGpu::ColorBuffer& color_buffer) const {
@@ -749,6 +1073,25 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
                 frame->width, frame->height, "output", frame_dump_index);
         ++frame_dump_index;
     }
+
+    // #47: record the generated frame (if any) BEFORE the ready signal, so the present
+    // queue's second cycle sees it through the ordering that already covers frame->image.
+    frame->fg_valid = false;
+    const auto fg_now = std::chrono::steady_clock::now();
+    if (framegen_ready && !frame->is_hdr && Ps4Settings::Get().vsync.load()) {
+        const u32 vblank_hz = std::max<u32>(1, EmulatorSettings.GetVblankFrequency());
+        const auto slot = std::chrono::microseconds(1000000 / vblank_hz);
+        const bool paced = fg_last_flip.time_since_epoch().count() == 0 ||
+                           (fg_now - fg_last_flip) * 5 > slot * 7; // >1.4 vblank slots
+        if (paced) {
+            SceneFrame scene{};
+            if (ConsumeSceneFrame(fg_scene_revision, scene) && scene.width == frame->width &&
+                scene.height == frame->height) {
+                FramegenRecord(frame, cmdbuf, scene);
+            }
+        }
+    }
+    fg_last_flip = fg_now;
 
     // Flush frame creation commands.
     frame->ready_semaphore = draw_scheduler.GetWorkSemaphore()->Handle();
@@ -1083,6 +1426,14 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         }
     }
     if (presented) Ps4Overlay::OnPresented(false);
+
+    // #47: the generated frame displays in the vblank slot after the real one (FIFO paces
+    // it); cycle B is submitted on the same queue after cycle A, which already waited the
+    // draw timeline, so no extra wait is needed here.
+    if (presented && frame->fg_valid) {
+        frame->fg_valid = false;
+        PresentGenerated(*frame, swapchain.GetExtent());
+    }
 
     free_frame();
     if (!is_reusing_frame && is_game_frame) {

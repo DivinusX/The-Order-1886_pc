@@ -14,6 +14,8 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "video_core/renderer_vulkan/vk_framegen.h"
+#include "video_core/renderer_vulkan/vk_order_resolve.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 #include "video_core/texture_cache/texture_cache.h"
 
@@ -39,6 +41,17 @@ struct Frame {
     bool is_hdr{false};
     u8 id{};
     vk::Format format{}; ///< of `image` (screenshots)
+    // #47 frame generation, allocated with the frame at display size: fg_hdr receives the
+    // SDK's interpolated HDR scene, fg_display the post-processed frame awaiting its extra
+    // present. fg_valid means both were recorded on the draw scheduler before
+    // ready_semaphore, so the present queue sees them through the same timeline wait.
+    VmaAllocation fg_hdr_alloc{};
+    vk::Image fg_hdr{};
+    vk::ImageView fg_hdr_view{};
+    VmaAllocation fg_display_alloc{};
+    vk::Image fg_display{};
+    vk::ImageView fg_display_view{};
+    bool fg_valid{false};
 };
 
 enum SchedulerType {
@@ -135,6 +148,23 @@ private:
     AmdGpu::Liverpool* liverpool;
     Scheduler draw_scheduler;
     std::deque<u64> recent_frame_ticks; ///< ORDER1886_FRAMES_AHEAD bound (PrepareFrame)
+    // #47: frame generation, decided at startup (the swapchain pool sizes around it). The
+    // fail streak disables the feed after repeated provider refusals so no driver quirk can
+    // stall or corrupt presentation; the counter reports generated presents every 600 flips.
+    FrameGeneration framegen;
+    bool framegen_wanted{false};
+    bool framegen_ready{false};
+    bool framegen_ctx_ready{false};
+    u32 framegen_fail_streak{0};
+    u64 fg_scene_revision{0};
+    u64 fg_seq{0};
+    u64 fg_presented{0};
+    u32 fg_hdr_w{0};
+    u32 fg_hdr_h{0};
+    std::chrono::steady_clock::time_point fg_last_flip{};
+
+    void FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const SceneFrame& scene);
+    void PresentGenerated(Frame& frame, const vk::Extent2D& extent);
     Scheduler present_scheduler;
     Scheduler flip_scheduler;
     Swapchain swapchain;

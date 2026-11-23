@@ -128,11 +128,11 @@ void FrameGeneration::Destroy() {
     resident_bytes_ = 0;
 }
 
-void FrameGeneration::PresentFrame(vk::CommandBuffer cmdbuf, const FramegenScene& scene,
+bool FrameGeneration::PresentFrame(vk::CommandBuffer cmdbuf, const FramegenScene& scene,
                                    vk::Image out, u32 out_w, u32 out_h, u64 frame_id, bool reset,
                                    u64 gpu_frames_completed) {
     if (!context_) {
-        return;
+        return false;
     }
     const auto read_only = static_cast<VkImageLayout>(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     OrderFramegenPrepare prepare{
@@ -156,7 +156,7 @@ void FrameGeneration::PresentFrame(vk::CommandBuffer cmdbuf, const FramegenScene
         .flags = scene.depth_reversed ? static_cast<u32>(ORDER_FRAMEGEN_DEPTH_INVERTED) : 0u,
     };
     if (api_->record_prepare(context_, &prepare) != ORDER_FRAMEGEN_OK) {
-        return; // the game's own presentation stands this frame
+        return false; // the game's own presentation stands this frame
     }
     OrderFramegenDispatch dispatch{
         .command_buffer = static_cast<VkCommandBuffer>(cmdbuf),
@@ -180,7 +180,7 @@ void FrameGeneration::PresentFrame(vk::CommandBuffer cmdbuf, const FramegenScene
         .gpu_frames_completed = gpu_frames_completed,
         .flags = scene.depth_reversed ? static_cast<u32>(ORDER_FRAMEGEN_DEPTH_INVERTED) : 0u,
     };
-    api_->record_dispatch(context_, &dispatch);
+    return api_->record_dispatch(context_, &dispatch) == ORDER_FRAMEGEN_OK;
 }
 
 void FrameGeneration::Retire(u64 completed_frame_id) {

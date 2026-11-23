@@ -324,6 +324,13 @@ struct CleanResolve {
     }
 };
 
+CleanResolve& CleanState() {
+    static CleanResolve state;
+    return state;
+}
+
+} // namespace
+
 std::mutex scene_mutex;
 SceneFrame scene;
 std::atomic<u64> scene_revision{0};
@@ -338,13 +345,6 @@ bool ConsumeSceneFrame(u64& revision, SceneFrame& out) {
     revision = now;
     return true;
 }
-
-CleanResolve& CleanState() {
-    static CleanResolve state;
-    return state;
-}
-
-} // namespace
 
 void OnSceneTargets(VideoCore::TextureCache& texture_cache, VideoCore::ImageId color,
                     VideoCore::ImageId depth, const AmdGpu::DepthControl& depth_control) {
