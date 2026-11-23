@@ -449,9 +449,21 @@ bool EditLauncherNumbers(std::initializer_list<std::pair<const char*, int>> valu
         return false;
     }
     const auto set = [&](const char* key, int value) {
+        if (value < 0) return false;
         const std::string quoted = std::string("\"") + key + "\"";
         size_t at = text.find(quoted);
-        if (at == std::string::npos || value < 0) return false;
+        if (at == std::string::npos) {
+            // The launcher's schema may not know this setting yet (frame_generation, #47):
+            // append it to the object instead of silently dropping the user's choice.
+            const size_t close = text.rfind('}');
+            if (close == std::string::npos) return false;
+            const size_t prev = text.find_last_not_of(" \t\r\n", close - 1);
+            if (prev != std::string::npos && text[prev] != '{') {
+                text.insert(prev + 1, ",");  // terminate the previous member, not ours
+            }
+            text.insert(close, "\n  \"" + std::string(key) + "\": " + std::to_string(value));
+            return true;
+        }
         at = text.find(':', at + quoted.size());
         if (at == std::string::npos) return false;
         const size_t start = text.find_first_not_of(" \t", at + 1);
