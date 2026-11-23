@@ -1207,7 +1207,10 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     frame->fg_valid = false;
     const auto fg_now = std::chrono::steady_clock::now();
     if (framegen_ready && !frame->is_hdr && Ps4Settings::Get().vsync.load()) {
-        const u32 vblank_hz = std::max<u32>(1, EmulatorSettings.GetVblankFrequency());
+        // The panel's real refresh, not the guest's emulated vblank: the 60 FPS recipe
+        // tells the guest vblank=60 Hz, which would make this gate refuse every
+        // generated frame even on a 144 Hz panel that has room for 120 presents.
+        const u32 vblank_hz = std::max<u32>(60, Ps4DisplayRefreshHz());
         const auto slot = std::chrono::microseconds(1000000 / vblank_hz);
         const bool paced = fg_last_flip.time_since_epoch().count() == 0 ||
                            (fg_now - fg_last_flip) * 5 > slot * 7; // >1.4 vblank slots

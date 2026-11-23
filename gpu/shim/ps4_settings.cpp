@@ -281,9 +281,11 @@ bool FixedRenderSession() {
 }
 
 bool MenuEnabled() {
+    // Gameplay-qualified (issue #47 owner validation, 2026-11-23): the F1 menu is on by
+    // default; ORDER1886_SETTINGS_MENU=0 keeps it closed for support experiments.
     static const bool enabled = [] {
         const char* value = std::getenv("ORDER1886_SETTINGS_MENU");
-        return value && value[0] == '1';
+        return !(value && value[0] == '0');
     }();
     return enabled;
 }
