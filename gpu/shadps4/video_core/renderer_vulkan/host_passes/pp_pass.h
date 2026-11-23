@@ -25,11 +25,19 @@ public:
     void Render(vk::CommandBuffer cmdbuf, vk::ImageView input, vk::Extent2D input_size,
                 Frame& output, Settings settings);
 
+    // Frame generation composite (#47): `generated` is the interpolated band (frame-sized,
+    // zeros where the SDK had no motion data), `real` shows through exactly there.
+    void RenderGenerated(vk::CommandBuffer cmdbuf, vk::ImageView generated, vk::ImageView real,
+                         Frame& output, Settings settings);
+
 private:
     vk::UniquePipeline pipeline{};
     vk::UniquePipelineLayout pipeline_layout{};
     vk::UniqueDescriptorSetLayout desc_set_layout{};
     vk::UniqueSampler sampler{};
+    vk::UniquePipelineLayout gen_pipeline_layout{};
+    vk::UniqueDescriptorSetLayout gen_desc_layout{};
+    vk::UniquePipeline gen_pipeline{};
 };
 
 } // namespace Vulkan::HostPasses

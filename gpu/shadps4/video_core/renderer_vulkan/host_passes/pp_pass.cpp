@@ -7,6 +7,7 @@
 #include "core/emulator_settings.h"
 #include "video_core/host_shaders/fs_tri_vert.h"
 #include "video_core/host_shaders/post_process_frag.h"
+#include "video_core/host_shaders/framegen_fallback_frag.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
@@ -166,6 +167,49 @@ void PostProcessingPass::Create(vk::Device device, const vk::Format surface_form
     pipeline = Check<"create post process pipeline">(device.createGraphicsPipelineUnique(
         /*pipeline_cache*/ {}, pipeline_info));
 
+    // Frame generation composite (#47): same fixed state, two textures, fallback shader.
+    {
+        const std::array gen_bindings{
+            vk::DescriptorSetLayoutBinding{
+                .binding = 0,
+                .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                .descriptorCount = 1,
+                .stageFlags = vk::ShaderStageFlagBits::eFragment,
+            },
+            vk::DescriptorSetLayoutBinding{
+                .binding = 1,
+                .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                .descriptorCount = 1,
+                .stageFlags = vk::ShaderStageFlagBits::eFragment,
+            },
+        };
+        const vk::DescriptorSetLayoutCreateInfo gen_layout_ci{
+            .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
+            .bindingCount = static_cast<u32>(gen_bindings.size()),
+            .pBindings = gen_bindings.data(),
+        };
+        gen_desc_layout = Check<"create framegen pp descriptor set layout">(
+            device.createDescriptorSetLayoutUnique(gen_layout_ci));
+        const vk::PipelineLayoutCreateInfo gen_layout_info{
+            .setLayoutCount = 1U,
+            .pSetLayouts = &*gen_desc_layout,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &push_constants,
+        };
+        gen_pipeline_layout = Check<"create framegen pp pipeline layout">(
+            device.createPipelineLayoutUnique(gen_layout_info));
+        const auto& gen_fs_module = CompileSPV(FRAMEGEN_FALLBACK_FRAG, device);
+        ASSERT(gen_fs_module);
+        auto gen_shaders = shaders_ci;
+        gen_shaders[1].module = gen_fs_module;
+        auto gen_info = pipeline_info;
+        gen_info.pStages = gen_shaders.data();
+        gen_info.layout = *gen_pipeline_layout;
+        gen_pipeline = Check<"create framegen pp pipeline">(
+            device.createGraphicsPipelineUnique({}, gen_info));
+        device.destroyShaderModule(gen_fs_module);
+    }
+
     // Once pipeline is compiled, we don't need the shader module anymore
     device.destroyShaderModule(vs_module);
     device.destroyShaderModule(fs_module);
@@ -277,6 +321,78 @@ void PostProcessingPass::Render(vk::CommandBuffer cmdbuf, vk::ImageView input,
     if (EmulatorSettings.IsVkHostMarkersEnabled()) {
         cmdbuf.endDebugUtilsLabelEXT();
     }
+}
+
+void PostProcessingPass::RenderGenerated(vk::CommandBuffer cmdbuf, vk::ImageView generated,
+                                         vk::ImageView real, Frame& frame, Settings settings) {
+    constexpr vk::ImageSubresourceRange simple_subresource = {
+        .aspectMask = vk::ImageAspectFlagBits::eColor,
+        .levelCount = 1,
+        .layerCount = 1,
+    };
+    const std::array<vk::RenderingAttachmentInfo, 1> attachments{{
+        {
+            .imageView = frame.image_view,
+            .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+            .loadOp = vk::AttachmentLoadOp::eClear,
+            .storeOp = vk::AttachmentStoreOp::eStore,
+        },
+    }};
+    const vk::RenderingInfo rendering_info{
+        .renderArea{.extent{.width = frame.width, .height = frame.height}},
+        .layerCount = 1,
+        .colorAttachmentCount = attachments.size(),
+        .pColorAttachments = attachments.data(),
+    };
+    const std::array image_infos{
+        vk::DescriptorImageInfo{.sampler = *sampler, .imageView = generated,
+                                .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal},
+        vk::DescriptorImageInfo{.sampler = *sampler, .imageView = real,
+                                .imageLayout = vk::ImageLayout::eGeneral},
+    };
+    const std::array set_writes{
+        vk::WriteDescriptorSet{.dstSet = VK_NULL_HANDLE,
+                               .dstBinding = 0,
+                               .dstArrayElement = 0,
+                               .descriptorCount = 1,
+                               .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                               .pImageInfo = &image_infos[0]},
+        vk::WriteDescriptorSet{.dstSet = VK_NULL_HANDLE,
+                               .dstBinding = 1,
+                               .dstArrayElement = 0,
+                               .descriptorCount = 1,
+                               .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                               .pImageInfo = &image_infos[1]},
+    };
+    cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, *gen_pipeline);
+    const std::array viewports = {
+        vk::Viewport{.width = static_cast<float>(frame.width),
+                     .height = static_cast<float>(frame.height),
+                     .minDepth = 0.0f,
+                     .maxDepth = 1.0f},
+    };
+    cmdbuf.setViewport(0, viewports);
+    cmdbuf.setScissor(0, vk::Rect2D{.extent{.width = frame.width, .height = frame.height}});
+    cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics, *gen_pipeline_layout, 0,
+                                set_writes);
+    cmdbuf.pushConstants(*gen_pipeline_layout, vk::ShaderStageFlagBits::eFragment, 0,
+                         sizeof(Settings), &settings);
+    cmdbuf.beginRendering(rendering_info);
+    cmdbuf.draw(3, 1, 0, 0);
+    cmdbuf.endRendering();
+
+    const auto post_barrier = vk::ImageMemoryBarrier2{
+        .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        .srcAccessMask = vk::AccessFlags2{vk::AccessFlagBits2::eColorAttachmentWrite},
+        .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
+        .dstAccessMask = vk::AccessFlags2{vk::AccessFlagBits2::eShaderRead},
+        .oldLayout = vk::ImageLayout::eColorAttachmentOptimal,
+        .newLayout = vk::ImageLayout::eGeneral,
+        .image = frame.image,
+        .subresourceRange = simple_subresource,
+    };
+    cmdbuf.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 1,
+                                               .pImageMemoryBarriers = &post_barrier});
 }
 
 } // namespace Vulkan::HostPasses

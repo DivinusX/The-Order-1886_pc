@@ -473,13 +473,6 @@ static void DumpRaw(const Instance& instance, Scheduler& scheduler, vk::CommandB
 
 // #47: HUD regions re-blitted from the real frame onto the generated one (normalized
 // display coords; reticle, subtitle/QTE band, weapon HUD, objective, top prompts).
-static constexpr float kFramegenHudRects[][4] = {
-    {0.46f, 0.46f, 0.54f, 0.54f},
-    {0.00f, 0.70f, 1.00f, 0.86f},
-    {0.62f, 0.78f, 1.00f, 1.00f},
-    {0.00f, 0.10f, 0.30f, 0.26f},
-    {0.36f, 0.06f, 0.64f, 0.20f},
-};
 
 void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const SceneFrame& scene) {
     static const bool step_trace = std::getenv("ORDER1886_FG_DUMP") != nullptr;
@@ -751,55 +744,11 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
     Frame shadow = *frame;
     shadow.image = frame->fg_display;
     shadow.image_view = frame->fg_display_view;
-    pp_pass.Render(cmdbuf, frame->fg_pre_view,
-                   vk::Extent2D{frame->width, frame->height}, shadow, pp_settings);
-    {
-        // pp_pass.Render already moved fg_display COLOR->GENERAL; chaining a second
-        // transition of the same image inside one call has undefined order and broke the
-        // driver's layout tracking (black rectangles on screen, clean in dumps).
-        const std::array barriers{
-            bar(frame->image, vk::ImageLayout::eGeneral, vk::ImageLayout::eTransferSrcOptimal,
-                vk::AccessFlags2{vk::AccessFlagBits2::eColorAttachmentWrite},
-                vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-                vk::AccessFlags2{vk::AccessFlagBits2::eTransferRead},
-                vk::PipelineStageFlagBits2::eTransfer),
-            bar(frame->fg_display, vk::ImageLayout::eGeneral, vk::ImageLayout::eTransferDstOptimal,
-                {}, {}, vk::AccessFlags2{vk::AccessFlagBits2::eTransferWrite},
-                vk::PipelineStageFlagBits2::eTransfer),
-        };
-        cmdbuf.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 2,
-                                                   .pImageMemoryBarriers = barriers.data()});
-        static const bool no_hud_copy = std::getenv("ORDER1886_FG_NO_HUD_COPY") != nullptr;
-        for (const auto& r : kFramegenHudRects) {
-            if (no_hud_copy) {
-                break;
-            }
-            // Rects are normalized in frame space; both images are frame-sized, so the copy
-            // is 1:1 - the HUD lands exactly where the game drew it.
-            const vk::Offset3D x0{static_cast<s32>(frame->width * r[0]),
-                                  static_cast<s32>(frame->height * r[1]), 0};
-            const vk::Offset3D x1{static_cast<s32>(frame->width * r[2]),
-                                  static_cast<s32>(frame->height * r[3]), 1};
-            const vk::ImageBlit region{
-                .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
-                .srcOffsets = {{x0, x1}},
-                .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
-                .dstOffsets = {{x0, x1}},
-            };
-            cmdbuf.blitImage(frame->image, vk::ImageLayout::eTransferSrcOptimal, frame->fg_display,
-                             vk::ImageLayout::eTransferDstOptimal, region, vk::Filter::eNearest);
-        }
-        const std::array restore{
-            bar(frame->image, vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::eGeneral,
-                vk::AccessFlags2{vk::AccessFlagBits2::eTransferRead},
-                vk::PipelineStageFlagBits2::eTransfer, {}, all),
-            bar(frame->fg_display, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eGeneral,
-                vk::AccessFlags2{vk::AccessFlagBits2::eTransferWrite},
-                vk::PipelineStageFlagBits2::eTransfer, {}, all),
-        };
-        cmdbuf.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 2,
-                                                   .pImageMemoryBarriers = restore.data()});
-    }
+    // One composite: generated content where the SDK produced it, the game's own frame
+    // wherever the interpolator left nothing (UI overlays, prompt hotspots) - no region
+    // guessing, no separate re-blit; the shader decodes and re-encodes, so whatever
+    // transfer curve the inputs sit on, the output matches the real presents.
+    pp_pass.RenderGenerated(cmdbuf, frame->fg_pre_view, frame->image_view, shadow, pp_settings);
     if (const char* fg_dump = std::getenv("ORDER1886_FG_DUMP"); fg_dump && *fg_dump) {
         static int fg_dump_index = 0;
         // Burst window: dumps stall the queue, so sample a short slice - by default late
