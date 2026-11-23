@@ -754,10 +754,10 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
     pp_pass.Render(cmdbuf, frame->fg_pre_view,
                    vk::Extent2D{frame->width, frame->height}, shadow, pp_settings);
     {
+        // pp_pass.Render already moved fg_display COLOR->GENERAL; chaining a second
+        // transition of the same image inside one call has undefined order and broke the
+        // driver's layout tracking (black rectangles on screen, clean in dumps).
         const std::array barriers{
-            bar(frame->fg_display, vk::ImageLayout::eColorAttachmentOptimal,
-                vk::ImageLayout::eGeneral, vk::AccessFlags2{vk::AccessFlagBits2::eColorAttachmentWrite},
-                vk::PipelineStageFlagBits2::eColorAttachmentOutput, {}, all),
             bar(frame->image, vk::ImageLayout::eGeneral, vk::ImageLayout::eTransferSrcOptimal,
                 vk::AccessFlags2{vk::AccessFlagBits2::eColorAttachmentWrite},
                 vk::PipelineStageFlagBits2::eColorAttachmentOutput,
@@ -767,9 +767,13 @@ void Presenter::FramegenRecord(Frame* frame, vk::CommandBuffer cmdbuf, const Sce
                 {}, {}, vk::AccessFlags2{vk::AccessFlagBits2::eTransferWrite},
                 vk::PipelineStageFlagBits2::eTransfer),
         };
-        cmdbuf.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 3,
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 2,
                                                    .pImageMemoryBarriers = barriers.data()});
+        static const bool no_hud_copy = std::getenv("ORDER1886_FG_NO_HUD_COPY") != nullptr;
         for (const auto& r : kFramegenHudRects) {
+            if (no_hud_copy) {
+                break;
+            }
             // Rects are normalized in frame space; both images are frame-sized, so the copy
             // is 1:1 - the HUD lands exactly where the game drew it.
             const vk::Offset3D x0{static_cast<s32>(frame->width * r[0]),
