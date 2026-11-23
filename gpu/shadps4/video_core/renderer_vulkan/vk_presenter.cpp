@@ -1212,8 +1212,12 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         // generated frame even on a 144 Hz panel that has room for 120 presents.
         const u32 vblank_hz = std::max<u32>(60, Ps4DisplayRefreshHz());
         const auto slot = std::chrono::microseconds(1000000 / vblank_hz);
+        // Generate only when the DOUBLED rate still fits the panel: two presents need two
+        // vblank slots inside one game frame (30->60 on 60 Hz: 33.3 ms >= 31.7 ms fits;
+        // 90->180 on 144 Hz: 11.1 ms < 13.2 ms does not - the old 1.4x floor let a 90 FPS
+        // session present-storm until the device ran out of memory).
         const bool paced = fg_last_flip.time_since_epoch().count() == 0 ||
-                           (fg_now - fg_last_flip) * 5 > slot * 7; // >1.4 vblank slots
+                           (fg_now - fg_last_flip) * 10 > slot * 19;
         if (paced) {
             SceneFrame scene{};
             if (ConsumeSceneFrame(fg_scene_revision, scene)) {
