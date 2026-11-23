@@ -225,7 +225,7 @@ foreach ($name in @('prepare.py','link_modules.py','link_libc.py','save_backup.p
         # The Button prompts option builds its artwork from the player's game files.
         'order1886_prompts.py','order1886_glyph_mod.py','order1886_ui_extract.py',
         # The prompt build names this repair for dumps whose 1.02 update sits beside the base tree.
-        'order1886_merge_update.py') {
+        'order1886_merge_update.py')) {
     Copy-Item -LiteralPath (Join-Path "$projectRoot/scripts" $name) -Destination $scriptData
 }
 Copy-Item -LiteralPath "$projectRoot/scripts/button_prompts" -Destination $scriptData -Recurse
