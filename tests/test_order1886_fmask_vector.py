@@ -24,7 +24,7 @@ class FmaskVectorTests(unittest.TestCase):
 #include <cassert>
 #include <stdexcept>
 #include "shader_recompiler/ir/passes/fmask_identity.h"
-namespace IR { using F32 = u32; }
+namespace IR { using F32 = u32; using Value = u32; }
 struct Emitter {
     u32 Imm32(u32 bits) { return bits; }
     template <typename T> T BitCast(u32 bits) { return bits; }
@@ -32,16 +32,23 @@ struct Emitter {
         return std::array<u32, sizeof...(parts)>{parts...};
     }
 };
-struct Image { AmdGpu::CompMapping mapping; auto DstSelect() const { return mapping; } };
+struct Image {
+    AmdGpu::CompMapping mapping;
+    unsigned long long address{0x1000};
+    auto DstSelect() const { return mapping; }
+    auto Address() const { return address; }
+};
 struct Inst {
     std::array<u32,4>& output;
     void ReplaceUsesWith(const std::array<u32,4>& value) { output = value; }
 };
 #undef ASSERT_MSG
 #define ASSERT_MSG(condition, ...) if (!(condition)) throw std::runtime_error("unsupported FMask selector")
-void Emit(std::array<u32,4>& output, AmdGpu::CompMapping selectors) {
+void Emit(std::array<u32,4>& output, AmdGpu::CompMapping selectors, unsigned long long address = 0x1000) {
     using Shader::Optimization::FmaskIdentityTexel;
-    Image image{selectors};
+    Image image{selectors, address};
+    const bool unbound = image.Address() == 0;
+    const auto mapping = image.DstSelect();
     Emitter ir;
     Inst inst{output};
 ''' + block + r'''
@@ -57,6 +64,14 @@ int main() {
     try { Emit(output, {.array = std::array{C::Red,C::Red,C::Blue,C::Red}}); }
     catch (const std::runtime_error&) { rejected = true; }
     assert(rejected);
+    // Issue #18: an unbound sharp (base address 0) is bound as a null texture by the
+    // rasterizer, so its incidental FMask selectors must translate to a zero sample
+    // instead of aborting the process.
+    output.fill(0xdeadbeef);
+    Emit(output, {.array = std::array{C::Red,C::Green,C::Blue,C::Alpha}}, 0);
+    assert((output == std::array<u32,4>{0,0,0,0}));
+    Emit(output, {.array = std::array{C::Red,C::Red,C::Red,C::Red}}, 0);
+    assert((output == std::array<u32,4>{0x76543210,0x76543210,0x76543210,0x76543210}));
 }
 '''
         environment = os.environ.copy()

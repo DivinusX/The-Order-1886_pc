@@ -346,10 +346,28 @@ void PatchImageSharp(const ResourceDiscovery& resource, Info& info, Descriptors&
     // Patch image instruction if image is FMask.
     if (AmdGpu::IsFmask(image.GetDataFmt())) {
         ASSERT_MSG(!is_written, "FMask storage instructions are not supported");
-        if ((inst.GetOpcode() == IR::Opcode::ImageRead ||
-             inst.GetOpcode() == IR::Opcode::ImageSampleRaw) &&
-            !FmaskIdentityTexel(image.DstSelect())) {
-            ReportFmaskFailureContext(info, image_res, inst);
+        // A sharp with no base address is unbound. Rasterizer::BindTextures already treats
+        // T# address 0 as a null image, so its format and selector bits do not describe an
+        // FMask read: they are whatever unrelated user data sits at the fetch offsets. The
+        // Order hits this in the glyph-upload compute shader (0xa7b66f58) after a cutscene,
+        // where the sample is inactive (see order1886_image_mode.h).
+        const bool unbound = image.Address() == 0;
+        const auto mapping = image.DstSelect();
+        if (!FmaskIdentityTexel(mapping) &&
+            (inst.GetOpcode() == IR::Opcode::ImageRead ||
+             inst.GetOpcode() == IR::Opcode::ImageSampleRaw)) {
+            if (unbound) {
+                static std::atomic<u32> reported{0};
+                if (reported.fetch_add(1, std::memory_order_relaxed) < 8) {
+                    LOG_WARNING(Render_Recompiler,
+                                "Unbound FMask image sharp (address 0) on shader {:#x}: sampling "
+                                "zero (R={} G={} B={} A={})",
+                                info.pgm_hash, u32(mapping.r), u32(mapping.g), u32(mapping.b),
+                                u32(mapping.a));
+                }
+            } else {
+                ReportFmaskFailureContext(info, image_res, inst);
+            }
         }
         // Classification itself is a translation dependency, even if the sampled value
         // becomes a constant. A later normal-image descriptor must select another module.
@@ -359,18 +377,26 @@ void PatchImageSharp(const ResourceDiscovery& resource, Info& info, Descriptors&
         switch (inst.GetOpcode()) {
         case IR::Opcode::ImageRead:
         case IR::Opcode::ImageSampleRaw: {
-            const auto mapping = image.DstSelect();
             const auto payload = FmaskIdentityTexel(mapping);
-            ASSERT_MSG(payload.has_value(),
-                       "Unsupported FMask payload selectors R={} G={} B={} A={}",
-                       u32(mapping.r), u32(mapping.g), u32(mapping.b), u32(mapping.a));
             const auto component = [&](u32 bits) { return ir.BitCast<IR::F32>(ir.Imm32(bits)); };
             // ImageRead/ImageSampleRaw return F32x4, including when a descriptor selects
             // the same payload word for several output components.
-            inst.ReplaceUsesWith(ir.CompositeConstruct(component((*payload)[0]),
-                                                        component((*payload)[1]),
-                                                        component((*payload)[2]),
-                                                        component((*payload)[3])));
+            if (payload.has_value()) {
+                inst.ReplaceUsesWith(ir.CompositeConstruct(component((*payload)[0]),
+                                                            component((*payload)[1]),
+                                                            component((*payload)[2]),
+                                                            component((*payload)[3])));
+            } else if (unbound) {
+                // Sampling an unbound image returns zero in the guest as well. Keep the
+                // FMask binding contract above for the pipeline layout; the rasterizer binds
+                // the null texture. Unsupported selectors on a bound descriptor still fail.
+                const IR::Value zero = component(0);
+                inst.ReplaceUsesWith(ir.CompositeConstruct(zero, zero, zero, zero));
+            } else {
+                ASSERT_MSG(false,
+                           "Unsupported FMask payload selectors R={} G={} B={} A={}",
+                           u32(mapping.r), u32(mapping.g), u32(mapping.b), u32(mapping.a));
+            }
             return;
         }
         case IR::Opcode::ImageQueryLod:

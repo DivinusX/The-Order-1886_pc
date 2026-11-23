@@ -47,3 +47,32 @@ are not replaced by guessed constants. The invalid module is no longer emitted
 on these runs because the unsupported descriptor fails earlier; this does not
 establish complete FMask emulation. See `order1886-runtime-status.md` for run
 identities and the remaining integer-filtering validation error.
+
+## Issue #18 capture: the glyph-upload shader's descriptor is unbound
+
+The v0.2.45 report (RTX 5080, 4K render width, DLSS, unlocked frame rate) stopped
+after a cutscene in compute shader `0xa7b66f58` — the glyph-upload shader covered by
+`order1886_image_mode.h` — with `Unsupported FMask payload selectors R=4 G=5 B=6 A=7`.
+This run finally has the context the earlier evidence asked for:
+
+- fetch: `load_mask=0xff`, offsets 44..51 (all eight words from user data),
+  `flat_dwords=54`, `fetched=true`
+- raw descriptor words:
+  `00000000 3f800000 3e3851ec 94e00fac 4575db04 00000010 98b51e10 00000010`
+- decoded with `AmdGpu::Image`: `Address()=0`, `base_address=0`, `type=9`,
+  `data_format=56`, `num_format=15`, selectors Red/Green/Blue/Alpha.
+
+The descriptor is a null sharp, not an FMask surface: the base address is zero and
+the other fields are unrelated values (`0x3f800000` is `1.0f`). `Rasterizer::
+BindTextures` already treats T# address 0 as a null image, so nothing in the guest
+requests FMask coverage here; this is the inactive image path of that shader, whose
+mode guard lives in `order1886_image_mode.h`.
+
+The pass now separates the two states. An unbound sharp whose selectors the identity
+model cannot resolve is replaced with a zero sample and keeps its FMask binding
+contract, exactly as a null texture sample reads zero. A bound descriptor with
+unestablished B/A selectors still records the failure context and asserts before
+module emission — no blanket return-zero and no guessed payload words. The CPU
+regression now compiles the production body for bound R/G/Zero/One, bound B/A
+(rejected) and unbound identity selectors (zero).
+
