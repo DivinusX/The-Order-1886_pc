@@ -619,7 +619,13 @@ void ReplaceTemporalResolve(Rasterizer& rasterizer, std::span<const VideoCore::I
         scene.height = h;
         scene.frame_ms = frame_ms;
         scene.depth_reversed = resolve.depth_inverted;
-        scene_revision.fetch_add(1, std::memory_order_release);
+        const u64 rev = scene_revision.fetch_add(1, std::memory_order_release) + 1;
+        if (rev == 1 || rev % 1800 == 0) {
+            std::printf("FrameGen: scene feed published %llu (%ux%u, provider %s)\n",
+                        static_cast<unsigned long long>(rev), w, h,
+                        resolve.provider ? resolve.provider->key : "none");
+            std::fflush(stdout);
+        }
     }
 }
 

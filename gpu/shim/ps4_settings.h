@@ -70,7 +70,9 @@ struct Values {
     std::atomic<int> rcas_strength{75};
     // #47: FSR 3.1.6 frame generation over the resolved scene (startup-only: the
     // swapchain's image count and the presenter's two-present loop are fixed at creation).
-    std::atomic<bool> frame_generation{false};
+    std::atomic<int> frame_generation{0};  ///< 0 off, 1 on (governed), 2 force on (#63 low-end)
+    /// Live governor state for the F1 row's note; runtime-only, never persisted.
+    std::atomic<bool> framegen_paused{false};
     /// Set by the presenter: sharpening ran on the last frame (it needs FSR 1 when the game's
     /// image is smaller than the window).
     std::atomic<bool> rcas_applied{false};
@@ -123,7 +125,7 @@ struct Values {
     int startup_requested_upscaler = UpscalerOff;
     /// frame_generation at startup: the swapchain image count and the two-present loop are
     /// fixed when the swapchain is created, so the menu row carries a "Restart" badge.
-    bool startup_frame_generation = false;
+    int startup_frame_generation = 0;
     /// Bit (1 << Upscaler) per temporal provider that loads on this device, set by the renderer.
     std::atomic<unsigned> upscaler_available_mask{0};
     /// The launcher's render width for the next launch (settings.json), 0 when unknown.

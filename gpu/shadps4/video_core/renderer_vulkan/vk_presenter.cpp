@@ -352,7 +352,7 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
     const vk::Device device = instance.GetDevice();
 
     // #47: frame generation decided at startup (the pool and context size around it).
-    framegen_wanted = Ps4Settings::Get().frame_generation.load();
+    framegen_wanted = Ps4Settings::Get().frame_generation.load() != 0;
     if (framegen_wanted) {
         framegen.Load();
         framegen_ready = framegen.available();
@@ -1235,24 +1235,38 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         }
         const u32 target_fps = Ps4Settings::Get().fps_limit.load();
         const double target_interval = 1.0 / (target_fps > 0 ? target_fps : 30);
-        if (fg_interval_ema > 0) {
+        // Force mode (#63): a low-end machine that runs below target is exactly the rig
+        // whose player asked for generation - honour the choice and skip the governor.
+        const bool force = Ps4Settings::Get().frame_generation.load() == 2;
+        if (fg_interval_ema > 0 && !force) {
             if (!fg_throttled && fg_interval_ema > target_interval * 1.15) {
                 fg_throttled = true;
                 std::printf("FrameGen: game below target FPS (%.0f/s) - generation paused "
                             "until it recovers\n",
                             1.0 / std::max(0.001, fg_interval_ema));
                 std::fflush(stdout);
-            } else if (fg_throttled && fg_interval_ema < target_interval * 1.05) {
+            } else if (fg_throttled && fg_interval_ema < target_interval * 1.10) {
                 fg_throttled = false;
                 std::printf("FrameGen: game holds target again - generation resumed\n");
                 std::fflush(stdout);
             }
         }
+        Ps4Settings::Get().framegen_paused = !force && fg_throttled;
         if (paced && !fg_throttled) {
             SceneFrame scene{};
             if (ConsumeSceneFrame(fg_scene_revision, scene)) {
+                fg_feed_seen = true;
                 FramegenRecord(frame, cmdbuf, scene);
             }
+        }
+        // A silent no-feed state is what made #63 look unfixable: when the requested
+        // upscaler fails to start, the game's own resolve runs and publishes nothing,
+        // and every FG gate below stays closed with no trace. Say so, once.
+        if (!fg_feed_seen && ++fg_idle_frames == 900) {
+            std::printf("FrameGen: no scene feed after 900 frames - the game's own temporal "
+                        "resolve is running (upscaler fallback?) or the scene was never "
+                        "recognised; generation stays idle\n");
+            std::fflush(stdout);
         }
     }
     fg_last_flip = fg_now;

@@ -139,7 +139,7 @@ void Set(Values& v, const std::string& key, const std::string& value) {
     } else if (key == "htile_expand") {
         v.htile_expand = i != 0;
     } else if (key == "frame_generation") {
-        v.frame_generation = i != 0;
+        v.frame_generation = i < 0 ? 0 : (i > 2 ? 2 : i);
     } else if (key == "live_resolution") {
         v.live_resolution = value == "auto" ? -1 : std::clamp(i, 0, 1);
     } else if (key == "output_res") {
@@ -314,8 +314,8 @@ void Save() {
     // readback mode and expand switch, or the next launch silently reverts the flicker fix.
     std::fprintf(file, "sun_sync=%d\nhtile_expand=%d\n",
         v.sun_sync.load(), int(v.htile_expand.load()));
-    if (v.frame_generation.load()) {
-        std::fprintf(file, "frame_generation=1\n");
+    if (v.frame_generation.load() != 0) {
+        std::fprintf(file, "frame_generation=%d\n", v.frame_generation.load());
     }
     // The launcher's FSR 3.1 choice arrives as this key; dropping it on an in-game save would
     // switch the player back to the game's own resolve at the next launch.

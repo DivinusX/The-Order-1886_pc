@@ -991,9 +991,9 @@ void ApplyUpscaling(int index) {
 // created around it), so the row persists and carries a Restart badge.
 void ApplyFramegen(int index) {
     auto& s = Ps4Settings::Get();
-    const bool on = index == 1;
-    s.frame_generation = on;
-    Ps4Settings::StoreLauncherNumber("frame_generation", on ? 1 : 0);
+    const int mode = std::clamp(index, 0, 2);
+    s.frame_generation = mode;
+    Ps4Settings::StoreLauncherNumber("frame_generation", mode);
 }
 
 constexpr int SharpenSteps = 5; // Off, 25, 50, 75, 100 %
@@ -1209,18 +1209,28 @@ std::vector<Row> BuildRows(int tab) {
 
     // Frame generation (#47): interpolated motion between the game's resolved frames.
     {
-        const bool on = Ps4Settings::Get().frame_generation.load();
-        const bool running = Ps4Settings::Get().startup_frame_generation;
-        rows.push_back({nullptr, "Frame generation", Kind::Choice, {"Off", "On"}, on ? 1 : 0,
-                        true, "Frame generation",
+        const int mode = Ps4Settings::Get().frame_generation.load();
+        const int running = Ps4Settings::Get().startup_frame_generation;
+        const bool paused = Ps4Settings::Get().framegen_paused.load();
+        std::string fg_note;
+        if (mode && !running) {
+            fg_note = "Restart the game to start frame generation.";
+        } else if (running && paused) {
+            fg_note = "Paused: the game is below its target frame rate. 'On (force)' keeps "
+                      "generating anyway - the choice for machines that run under 30.";
+        } else if (mode == 2) {
+            fg_note = "Forced: generating even while the game runs below target.";
+        }
+        rows.push_back({nullptr, "Frame generation", Kind::Choice, {"Off", "On", "On (force)"},
+                        mode, true, "Frame generation",
                         "AMD FSR 3 frame generation inserts a smoothed in-between frame after "
-                        "each game frame: 30 FPS gameplay shows as 60. Needs vertical sync and "
-                        "an output the size the game renders at; the HUD is copied from the "
-                        "game's own frame. Experimental. Takes effect on the next start.",
-                        on && !running ? "Restart the game to start frame generation."
-                                        : (running ? "" : "Off: the game presents every frame itself."),
-                        ApplyFramegen});
-        if (on != running) {
+                        "each game frame: 30 FPS gameplay shows as 60. Needs vertical sync; "
+                        "regions without motion data (HUD, text) show the game's own frame. "
+                        "'On' pauses automatically when the GPU cannot hold the target rate; "
+                        "'On (force)' generates regardless - for low-end devices. Takes "
+                        "effect on the next start.",
+                        fg_note, ApplyFramegen});
+        if (mode != running) {
             rows.back().badge = "Restart";
         }
     }
