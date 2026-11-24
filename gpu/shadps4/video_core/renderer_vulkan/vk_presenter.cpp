@@ -869,9 +869,11 @@ void Presenter::PresentGenerated(Frame& frame, const vk::Extent2D& extent) {
         }
     }
     SubmitInfo info{};
-    // The binary acquired semaphore was consumed by the real present this cycle; the
-    // generated frame must instead wait on the draw timeline - fg_display's HUD regions are
-    // written there, and without this wait the present queue raced it (black rectangles).
+    // Both waits are required: every AcquireNextImage must be consumed by exactly one wait
+    // on the binary acquired semaphore (skipping it double-signals the shared semaphore and
+    // the driver eventually crashes in a later submit), and the draw timeline must be
+    // waited because fg_display's HUD regions are written there (the black-rectangle race).
+    info.AddWait(swapchain.GetImageAcquiredSemaphore());
     info.AddWait(frame.ready_semaphore, frame.ready_tick);
     info.AddSignal(swapchain.GetPresentReadySemaphore());
     scheduler.Flush(info);
@@ -1238,15 +1240,28 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         // Force mode (#63): a low-end machine that runs below target is exactly the rig
         // whose player asked for generation - honour the choice and skip the governor.
         const bool force = Ps4Settings::Get().frame_generation.load() == 2;
-        if (fg_interval_ema > 0 && !force) {
+        // Dwell + latch: a machine sitting exactly on the threshold (78/s vs a 90 FPS
+        // target) limit-cycles the governor every EMA tick - log spam and a visible
+        // rhythm flip. Flips need 45 s apart, and the third pause latches generation off
+        // for the session; On (force) overrides.
+        static auto fg_last_flip_time = fg_now;
+        static int fg_flip_count = 0;
+        const bool dwell_ok =
+            std::chrono::duration<double>(fg_now - fg_last_flip_time).count() > 45.0;
+        if (fg_interval_ema > 0 && !force && !fg_latched && dwell_ok) {
             if (!fg_throttled && fg_interval_ema > target_interval * 1.15) {
                 fg_throttled = true;
-                std::printf("FrameGen: game below target FPS (%.0f/s) - generation paused "
-                            "until it recovers\n",
-                            1.0 / std::max(0.001, fg_interval_ema));
+                fg_latched = ++fg_flip_count >= 3;
+                fg_last_flip_time = fg_now;
+                std::printf("FrameGen: game below target FPS (%.0f/s) - generation %s\n",
+                            1.0 / std::max(0.001, fg_interval_ema),
+                            fg_latched ? "latched off for this session (3 unstable flips; "
+                                         "use 'On (force)' to override)"
+                                       : "paused until it recovers");
                 std::fflush(stdout);
             } else if (fg_throttled && fg_interval_ema < target_interval * 1.10) {
                 fg_throttled = false;
+                fg_last_flip_time = fg_now;
                 std::printf("FrameGen: game holds target again - generation resumed\n");
                 std::fflush(stdout);
             }

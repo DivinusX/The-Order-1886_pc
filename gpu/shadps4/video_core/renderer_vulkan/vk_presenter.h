@@ -165,6 +165,7 @@ private:
     u64 fg_scene_revision{0};
     u64 fg_seq{0};
     u64 fg_presented{0};
+    bool fg_latched{false};    ///< governor: 3 unstable flips -> off for session
     bool fg_feed_seen{false};   ///< first ConsumeSceneFrame success (#63 idle diagnostic)
     u64 fg_idle_frames{0};
     u64 real_presented{0};  ///< swapchain presents of real frames (#47 rate check)
