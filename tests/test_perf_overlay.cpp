@@ -170,6 +170,9 @@ int main() {
     Ps4Settings::Load();
     assert(!v.fsr1);
     std::remove(path);
+    // Save() also keeps the menu-only choices beside the ini (runtime-menu.ini). Left in the
+    // checkout it made the Windows release build report source_dirty (v0.2.54).
+    std::remove("runtime-menu.ini");
     // Hardware panel helpers (Linux /proc parsing, names, colour bands, sensor choice).
     P::CpuTimes a, b;
     assert(P::ParseCpuLine("cpu  100 0 50 800 50 0 0 0 0 0", a));
