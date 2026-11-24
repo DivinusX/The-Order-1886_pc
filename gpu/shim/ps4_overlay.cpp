@@ -1946,7 +1946,7 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
     overlay_instance = &instance;
     initialized = true;
     std::printf("Overlay: %s\n", SettingsMenuEnabled()
-                    ? "menu ready (Insert or R3+L2)"
+                    ? "menu ready (F1, Insert or R3+L2)"
                     : "settings menu disabled; system dialogs and screenshots available");
 }
 

@@ -159,21 +159,41 @@ Values& Get() {
     return values;
 }
 
+namespace {
+std::string SiblingPath(const char* name);
+void StoreMenuChoices();
+
+bool ReadIni(Values& v, const char* path) {
+    FILE* file = std::fopen(path, "r");
+    if (!file) {
+        return false;
+    }
+    char line[256];
+    while (std::fgets(line, sizeof(line), file)) {
+        std::string text{line};
+        text.erase(text.find_last_not_of(" \t\r\n") + 1);
+        const auto eq = text.find('=');
+        if (text.empty() || text[0] == '#' || eq == std::string::npos) {
+            continue;
+        }
+        Set(v, text.substr(0, eq), text.substr(eq + 1));
+    }
+    std::fclose(file);
+    return true;
+}
+} // namespace
+
 void Load() {
     auto& v = Get();
     v.fsr1 = false;
-    if (FILE* file = std::fopen(Path(), "r")) {
-        char line[256];
-        while (std::fgets(line, sizeof(line), file)) {
-            std::string text{line};
-            text.erase(text.find_last_not_of(" \t\r\n") + 1);
-            const auto eq = text.find('=');
-            if (text.empty() || text[0] == '#' || eq == std::string::npos) {
-                continue;
-            }
-            Set(v, text.substr(0, eq), text.substr(eq + 1));
-        }
-        std::fclose(file);
+    // The launcher rewrites runtime.ini from its settings.json on every launch and knows
+    // nothing of the menu-only choices (vibration, overlay placement), so the menu keeps those
+    // in a file of its own (StoreMenuChoices). Read first: a key runtime.ini does set wins.
+    const std::string menu = SiblingPath("runtime-menu.ini");
+    if (ReadIni(v, menu.c_str())) {
+        std::printf("Settings: menu choices from %s\n", menu.c_str());
+    }
+    if (ReadIni(v, Path())) {
         std::printf("Settings: %s\n", Path());
     }
     // Environment overrides (scripts, A/B tests).
@@ -323,6 +343,7 @@ void Save() {
         std::fprintf(file, "upscaler=%s\n", UpscalerName(v.requested_upscaler));
     }
     std::fclose(file);
+    StoreMenuChoices();
 }
 
 namespace {
@@ -438,8 +459,18 @@ void SaveQuality() {
 }
 
 namespace {
-// Replace the numbers after "key": in place; the launcher owns the rest of the file.
-bool EditLauncherNumbers(std::initializer_list<std::pair<const char*, int>> values) {
+// One launcher setting to write back. A number also stands in for a JSON bool (non-zero is
+// true) when the launcher stores that key as a bool; text is only written over a JSON string.
+struct LauncherValue {
+    const char* key;
+    int number = -1;            // < 0: not a number setting (or left out by the caller)
+    const char* text = nullptr; // non-null: a string setting
+};
+
+// Replace the values after "key": in place, keeping each value's JSON type; the launcher owns
+// the rest of the file. A number written over a bool used to fail (frame_generation is
+// `false` in the launcher's schema), so the in-game choice was dropped silently.
+bool EditLauncherValues(std::initializer_list<LauncherValue> values) {
     const std::string path = SiblingPath("settings.json");
     std::string text;
     if (FILE* file = std::fopen(path.c_str(), "rb")) {
@@ -450,11 +481,25 @@ bool EditLauncherNumbers(std::initializer_list<std::pair<const char*, int>> valu
     if (text.empty()) {
         return false;
     }
-    const auto set = [&](const char* key, int value) {
-        if (value < 0) return false;
-        const std::string quoted = std::string("\"") + key + "\"";
-        size_t at = text.find(quoted);
-        if (at == std::string::npos) {
+    // The position of key's value, or npos. Only a member name counts: the quoted key must be
+    // followed by ':' (a string value equal to the key is skipped).
+    const auto find_value = [&](const std::string& quoted) {
+        for (size_t at = text.find(quoted); at != std::string::npos;
+             at = text.find(quoted, at + 1)) {
+            const size_t colon = text.find_first_not_of(" \t\r\n", at + quoted.size());
+            if (colon != std::string::npos && text[colon] == ':') {
+                return text.find_first_not_of(" \t\r\n", colon + 1);
+            }
+        }
+        return std::string::npos;
+    };
+    const auto set = [&](const LauncherValue& value) {
+        if (!value.text && value.number < 0) return false;
+        const std::string quoted = std::string("\"") + value.key + "\"";
+        const size_t start = find_value(quoted);
+        const std::string written =
+            value.text ? "\"" + std::string(value.text) + "\"" : std::to_string(value.number);
+        if (start == std::string::npos) {
             // The launcher's schema may not know this setting yet (frame_generation, #47):
             // append it to the object instead of silently dropping the user's choice.
             const size_t close = text.rfind('}');
@@ -463,24 +508,37 @@ bool EditLauncherNumbers(std::initializer_list<std::pair<const char*, int>> valu
             if (prev != std::string::npos && text[prev] != '{') {
                 text.insert(prev + 1, ",");  // terminate the previous member, not ours
             }
-            text.insert(close, "\n  \"" + std::string(key) + "\": " + std::to_string(value));
+            text.insert(close, "\n  \"" + std::string(value.key) + "\": " + written);
             return true;
         }
-        at = text.find(':', at + quoted.size());
-        if (at == std::string::npos) return false;
-        const size_t start = text.find_first_not_of(" \t", at + 1);
-        if (start == std::string::npos) return false;
         size_t end = start;
-        while (end < text.size() && (std::isdigit(static_cast<unsigned char>(text[end])) || text[end] == '-')) {
+        std::string replacement;
+        if (text[start] == '"') {
+            if (!value.text) return false; // a string setting needs text
+            end = text.find('"', start + 1);
+            if (end == std::string::npos) return false;
             ++end;
+            replacement = written;
+        } else if (text.compare(start, 4, "true") == 0 || text.compare(start, 5, "false") == 0) {
+            if (value.text) return false;
+            end = start + (text[start] == 't' ? 4 : 5);
+            replacement = value.number != 0 ? "true" : "false";
+        } else {
+            if (value.text) return false;
+            while (end < text.size() &&
+                   (std::isdigit(static_cast<unsigned char>(text[end])) || text[end] == '-')) {
+                ++end;
+            }
+            if (end == start) return false;
+            replacement = written;
         }
-        if (end == start) return false;
-        text.replace(start, end - start, std::to_string(value));
+        if (text.compare(start, end - start, replacement) == 0) return false;
+        text.replace(start, end - start, replacement);
         return true;
     };
     bool changed = false;
-    for (const auto& [key, value] : values) {
-        changed |= set(key, value);
+    for (const auto& value : values) {
+        changed |= set(value);
     }
     if (!changed) {
         return false;
@@ -500,11 +558,55 @@ bool EditLauncherNumbers(std::initializer_list<std::pair<const char*, int>> valu
 #endif
     return std::rename(temp.c_str(), path.c_str()) == 0;
 }
+
+// In-game menu changes have to outlive the next launch, and the launcher's worker rewrites
+// runtime.ini from settings.json every time. So a save also writes the launcher's own keys
+// back into settings.json, and keeps the menu-only choices (which the launcher never writes)
+// in runtime-menu.ini. Before this, only frame generation, sharpening, render width, frame rate
+// and anisotropy were written back; everything else reverted at the next launch.
+void StoreMenuChoices() {
+    const auto& v = Get();
+    const std::string menu = SiblingPath("runtime-menu.ini");
+    if (FILE* file = std::fopen(menu.c_str(), "w")) {
+        std::fprintf(file,
+                     "# The Order: 1886 in-game menu choices the launcher does not own\n"
+                     "vibration=%d\noverlay_scale=%d\noverlay_corner=%d\noverlay_opacity=%d\n"
+                     "overlay_layout=%d\nmenu_tab=%d\n",
+                     v.vibration.load(), v.overlay_scale.load(), v.overlay_corner.load(),
+                     v.overlay_opacity.load(), v.overlay_layout.load(), v.menu_tab.load());
+        std::fclose(file);
+    } else {
+        std::printf("Settings: cannot write %s\n", menu.c_str());
+    }
+    // The launcher's presentation_filter: a temporal provider by name, otherwise FSR 1 or
+    // linear. FSR 4.1.1 and the engine TAA have no launcher value, so they are left alone.
+    const int upscaler = v.requested_upscaler.load();
+    const char* filter = upscaler == UpscalerFsr3   ? "fsr3"
+                         : upscaler == UpscalerFsr4 ? "fsr4"
+                         : upscaler == UpscalerDlss ? "dlss"
+                         : upscaler != UpscalerOff  ? nullptr
+                         : v.fsr1.load()            ? "fsr1"
+                                                    : "linear";
+    const int mode = std::clamp(v.display_mode.load(), 0, int(Ps4Graphics::DisplayModeCount) - 1);
+    const std::string display_mode{Ps4Graphics::DisplayModeKeys[mode]};
+    EditLauncherValues({
+        {"display_mode", -1, display_mode.c_str()},
+        {"vsync", int(v.vsync.load())},
+        {"show_fps", int(v.show_fps.load())},
+        {"frames_queued", v.frames_queued.load()},
+        {"mouse_look", int(v.mouse_look.load())},
+        {"mouse_sensitivity", v.mouse_sensitivity.load()},
+        {"mouse_invert_y", int(v.mouse_invert_y.load())},
+        {"sun_sync", v.sun_sync.load()},
+        {"htile_expand", int(v.htile_expand.load())},
+        {"presentation_filter", -1, filter},
+    });
+}
 } // namespace
 
 bool StoreForNextLaunch(int render_width, int frame_rate, int anisotropy) {
     // A key the caller leaves out (0 width or rate, negative anisotropy) is not touched.
-    const bool ok = EditLauncherNumbers({{"render_width", render_width > 0 ? render_width : -1},
+    const bool ok = EditLauncherValues({{"render_width", render_width > 0 ? render_width : -1},
                                          {"frame_rate", frame_rate > 0 ? frame_rate : -1},
                                          {"anisotropy", anisotropy}});
     if (ok && render_width > 0) {
@@ -514,7 +616,7 @@ bool StoreForNextLaunch(int render_width, int frame_rate, int anisotropy) {
 }
 
 bool StoreLauncherNumber(const char* key, int value) {
-    return EditLauncherNumbers({{key, value}});
+    return EditLauncherValues({{key, value}});
 }
 
 float PresetScale(int preset) {

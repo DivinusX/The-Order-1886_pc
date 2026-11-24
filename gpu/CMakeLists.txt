@@ -443,6 +443,11 @@ add_executable(perf-overlay-test EXCLUDE_FROM_ALL ../tests/test_perf_overlay.cpp
 target_include_directories(perf-overlay-test PRIVATE shim)
 target_compile_options(perf-overlay-test PRIVATE -UNDEBUG)
 
+add_executable(menu-persistence-test EXCLUDE_FROM_ALL ../tests/test_order1886_menu_persistence.cpp
+    shim/ps4_settings.cpp shim/ps4_cheats.cpp)
+target_include_directories(menu-persistence-test PRIVATE shim)
+target_compile_options(menu-persistence-test PRIVATE -UNDEBUG)
+
 add_executable(cheats-test EXCLUDE_FROM_ALL ../tests/test_order1886_cheats.cpp
     shim/ps4_cheats.cpp)
 target_include_directories(cheats-test PRIVATE shim)
