@@ -1473,12 +1473,6 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
 
     buffer_cache.WatchWrittenBuffers(ReadbackWatchedShader(cs.pgm_hash));
     buffer_cache.SetCurrentDispatch(cs.pgm_hash);
-    // Sun EVSM copy dispatch (mateussmeneses 7cf7979, theorder1886-port#26): snapshot the
-    // registered sun ranges into host staging at this point, so a CPU read fault can be
-    // served with the newest completed copy without draining the queue (v0.2.10 flicker).
-    if (cs.pgm_hash == 0x7b1b18c9) {
-        buffer_cache.RecordSunCopies();
-    }
     const bool bound = BindResources(pipeline);
     buffer_cache.WatchWrittenBuffers(false);
     buffer_cache.SetCurrentDispatch(0);
@@ -1545,6 +1539,17 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     }
 
     ResetBindings(true);
+    // Sun EVSM range dispatch (mateussmeneses 7cf7979, theorder1886-port#26): snapshot the
+    // registered sun ranges into host staging so a CPU read fault is served with the newest
+    // completed copy without draining the queue (v0.2.10 flicker). The snapshot must follow
+    // this dispatch: 0x7b1b18c9 itself writes the range slots, and the game's CPU resets a
+    // slot before the GPU refills it. Recorded before the dispatch (as until v0.2.52), a batch
+    // held the reset slot instead of the fitted range, so the cascades lost the sun on three
+    // frames of every four (issue #64). ResetBindings above registered the dispatch's buffer
+    // writes, so the copy gets its compute-to-transfer barrier.
+    if (cs.pgm_hash == 0x7b1b18c9) {
+        buffer_cache.RecordSunCopies();
+    }
     scheduler.KickRecording();
 }
 
