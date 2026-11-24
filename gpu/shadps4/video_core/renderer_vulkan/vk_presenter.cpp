@@ -1221,8 +1221,10 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         // Headroom governor: frame generation is only worth having while the game still
         // holds its own target. Measured here: 60 FPS + FG on an RTX 5050 laptop slid the
         // real rate to 41/s - the interpolator's cost sank the very frames it doubled.
-        // The EMA of the game's frame interval must stay under 1.10x target to generate,
-        // and only recovers to generating below 0.95x (hysteresis, ~2 s to settle).
+        // The EMA of the game's frame interval pauses generation above 1.15x target and
+        // resumes under 1.05x. The resume bound must stay reachable by a healthy game:
+        // 30 FPS mode runs 29.6/s (1.015x) at best, and the first cut's 0.95x floor made
+        // a title-screen pause (27/s = 1.11x) permanent - measured on the owner install.
         static double fg_interval_ema = 0.0;
         static bool fg_throttled = false;
         if (fg_last_flip.time_since_epoch().count() != 0) {
@@ -1234,13 +1236,13 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         const u32 target_fps = Ps4Settings::Get().fps_limit.load();
         const double target_interval = 1.0 / (target_fps > 0 ? target_fps : 30);
         if (fg_interval_ema > 0) {
-            if (!fg_throttled && fg_interval_ema > target_interval * 1.10) {
+            if (!fg_throttled && fg_interval_ema > target_interval * 1.15) {
                 fg_throttled = true;
                 std::printf("FrameGen: game below target FPS (%.0f/s) - generation paused "
                             "until it recovers\n",
                             1.0 / std::max(0.001, fg_interval_ema));
                 std::fflush(stdout);
-            } else if (fg_throttled && fg_interval_ema < target_interval * 0.95) {
+            } else if (fg_throttled && fg_interval_ema < target_interval * 1.05) {
                 fg_throttled = false;
                 std::printf("FrameGen: game holds target again - generation resumed\n");
                 std::fflush(stdout);
