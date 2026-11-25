@@ -204,6 +204,11 @@ private:
     void PumpWarmUp();
     void StopWarmUp();
     bool AsyncCompilation() const;
+    /// Bounded waits for async compiles (issues #61, #67), see ShaderWaitAllowance.
+    std::chrono::nanoseconds ShaderWaitAllowance();
+    void SpendShaderWait(std::chrono::steady_clock::time_point start);
+    bool WaitForPendingShaders();
+    const GraphicsPipeline* WaitForPendingGraphics(const GraphicsPipelineKey& key);
     bool RefreshGraphicsKey(PipelineSelection& sel);
     bool RefreshGraphicsStages(PipelineSelection& sel);
     bool RefreshComputeKey();
@@ -255,6 +260,9 @@ private:
     PipelineSelection sel{}; ///< GPU thread selection state
     ComputePipelineKey compute_key{};
     u32 num_new_pipelines{}; // new pipelines added to the cache since the game start
+    /// GPU-thread token bucket for ShaderWaitAllowance, in nanoseconds of waiting.
+    double shader_wait_tokens_ns = -1.0; ///< negative: not started, the bucket starts full
+    std::chrono::steady_clock::time_point shader_wait_refill{};
 
     // Only if Config::collectShadersForDebug()
     tsl::robin_map<vk::ShaderModule,

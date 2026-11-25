@@ -3907,11 +3907,30 @@ void Rasterizer::UpdateDepthStencilState() const {
         const char* env = std::getenv("ORDER1886_REDRAW_DEPTH_BIAS");
         return env ? float(std::atof(env)) : 16.f;
     }();
+    // The constant bias is not enough where the two passes disagree more: on surfaces seen
+    // edge-on (cheeks in profile, faces at a distance outdoors) the mismatch grows with the
+    // depth slope of the triangle (issue #27), so a slope term is added. Its size matters:
+    // at the v0.2.56 default a floor seen at a grazing angle is pulled over the carpet lying
+    // on it and the carpet pops in and out with every camera move (issue #67). Measured on
+    // Windows, RTX 5050, v0.2.56 runtime: 0 brings the black face spots back, the v0.2.56
+    // default makes the carpet pop, 0.25 fixes both. ORDER1886_REDRAW_SLOPE_BIAS=0 turns the
+    // slope term off (v0.2.49).
+    // ORDER1886_REDRAW_BIAS_CLAMP (depth-range units, default 0 = no clamp) caps the total
+    // bias, should another surface pair still need it; it needs the depthBiasClamp feature.
+    static const float redraw_slope = [] {
+        const char* env = std::getenv("ORDER1886_REDRAW_SLOPE_BIAS");
+        return env ? std::max(float(std::atof(env)), 0.f) : 0.25f;
+    }();
+    static const float redraw_clamp = [] {
+        const char* env = std::getenv("ORDER1886_REDRAW_BIAS_CLAMP");
+        return env ? std::max(float(std::atof(env)), 0.f) : 0.f;
+    }();
     const auto func = regs.depth_control.depth_func;
     const bool redraw = depth_test_enabled && !depth_stencil.depth_write_enable &&
                         !depth_bias_enabled && redraw_bias != 0.f &&
                         (func == AmdGpu::CompareFunc::LessEqual ||
                          func == AmdGpu::CompareFunc::GreaterEqual);
+    const bool redraw_clamped = redraw_clamp > 0.f && instance.IsDepthBiasClampSupported();
     dynamic_state.SetDepthBiasEnabled(depth_bias_enabled || redraw);
     if (depth_bias_enabled) {
         const bool front = regs.polygon_control.enable_polygon_offset_front;
@@ -3920,9 +3939,12 @@ void Rasterizer::UpdateDepthStencilState() const {
             front ? regs.poly_offset.front_offset : regs.poly_offset.back_offset,
             regs.poly_offset.depth_bias, slope / 16.f);
     } else if (redraw) {
-        dynamic_state.SetDepthBias(func == AmdGpu::CompareFunc::LessEqual ? -redraw_bias
-                                                                           : redraw_bias,
-                                   0.f, 0.f);
+        // Toward the camera: negative for LESS_OR_EQUAL, positive for GREATER_OR_EQUAL. The
+        // clamp carries the same sign (Vulkan clamps a negative bias with max(bias, clamp)).
+        const float sign = func == AmdGpu::CompareFunc::LessEqual ? -1.f : 1.f;
+        dynamic_state.SetDepthBias(sign * redraw_bias,
+                                   redraw_clamped ? sign * redraw_clamp : 0.f,
+                                   sign * redraw_slope);
     }
 
     const bool stencil_test_enabled = depth_stencil.stencil_test_enable;

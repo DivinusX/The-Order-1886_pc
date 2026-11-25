@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -662,6 +663,114 @@ bool PipelineCache::AsyncCompilation() const {
     return compiler && Ps4Settings::Get().async_shaders.load(std::memory_order_relaxed);
 }
 
+// With async shaders a draw whose shader or pipeline is still compiling is skipped: no freeze,
+// but after a cutscene camera cut faces are drawn without their lighting and objects pop in
+// late (#61). Waiting for the compile fixes that, but a long wait at once is a visible hitch
+// (#67: a 100 ms budget stuttered every cut on a fresh cache). The wait here is a token bucket:
+//  - at most ORDER1886_SHADER_WAIT_MS (default 6) of waiting at once, so a cut costs at most
+//    a few milliseconds more on one frame instead of a hitch;
+//  - refilled at ORDER1886_SHADER_WAIT_SHARE (default 0.15) of the elapsed time, so waiting
+//    never takes more than that share of the GPU thread while shaders keep compiling.
+// What is not ready within the budget is still skipped and appears a frame or two later, as
+// before. ORDER1886_SHADER_WAIT_MS=0 turns the wait off (the v0.2.49 behaviour).
+namespace {
+struct ShaderWaitConfig {
+    double cap_ns;
+    double share;
+};
+const ShaderWaitConfig& GetShaderWaitConfig() {
+    static const ShaderWaitConfig config = [] {
+        double cap_ms = 6.0;
+        double share = 0.15;
+        if (const char* env = std::getenv("ORDER1886_SHADER_WAIT_MS")) {
+            cap_ms = std::atof(env);
+        }
+        if (const char* env = std::getenv("ORDER1886_SHADER_WAIT_SHARE")) {
+            share = std::atof(env);
+        }
+        cap_ms = std::clamp(cap_ms, 0.0, 50.0);
+        share = std::clamp(share, 0.0, 0.5);
+        LOG_INFO(Render_Vulkan, "ps4: shader wait budget {:.1f} ms, share {:.2f}", cap_ms, share);
+        return ShaderWaitConfig{cap_ms * 1e6, share};
+    }();
+    return config;
+}
+} // namespace
+
+std::chrono::nanoseconds PipelineCache::ShaderWaitAllowance() {
+    const auto& config = GetShaderWaitConfig();
+    if (config.cap_ns <= 0.0 || config.share <= 0.0) {
+        return std::chrono::nanoseconds{0};
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (shader_wait_tokens_ns < 0.0) {
+        shader_wait_tokens_ns = config.cap_ns;
+    } else {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            now - shader_wait_refill).count();
+        shader_wait_tokens_ns += config.share * double(elapsed);
+    }
+    shader_wait_tokens_ns = std::min(shader_wait_tokens_ns, config.cap_ns);
+    shader_wait_refill = now;
+    // Below 0.25 ms a wait rarely sees a compile finish; keep the tokens for a later draw.
+    if (shader_wait_tokens_ns < 250'000.0) {
+        return std::chrono::nanoseconds{0};
+    }
+    return std::chrono::nanoseconds{static_cast<long long>(shader_wait_tokens_ns)};
+}
+
+void PipelineCache::SpendShaderWait(std::chrono::steady_clock::time_point start) {
+    const auto spent = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                           std::chrono::steady_clock::now() - start).count();
+    shader_wait_tokens_ns = std::max(shader_wait_tokens_ns - double(spent), 0.0);
+    // Reported as the frame's compile wait by ORDER1886_FRAME_STATS.
+    g_ps4_compile_wait_ns += u64(spent);
+}
+
+bool PipelineCache::WaitForPendingShaders() {
+    if (pending_programs.empty()) {
+        return false;
+    }
+    const auto allowance = ShaderWaitAllowance();
+    if (allowance.count() <= 0) {
+        return false;
+    }
+    const auto start = std::chrono::steady_clock::now();
+    const auto deadline = start + allowance;
+    bool all_ready = true;
+    for (const auto* program : pending_programs) {
+        const auto left = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            deadline - std::chrono::steady_clock::now());
+        if (left.count() <= 0 || !program->pending || !program->pending->job.WaitFor(left)) {
+            all_ready = false;
+            break;
+        }
+    }
+    SpendShaderWait(start);
+    PublishShaders();
+    return all_ready;
+}
+
+const GraphicsPipeline* PipelineCache::WaitForPendingGraphics(const GraphicsPipelineKey& key) {
+    const auto pending = pending_graphics.find(key);
+    if (pending == pending_graphics.end()) {
+        return nullptr;
+    }
+    const auto allowance = ShaderWaitAllowance();
+    if (allowance.count() <= 0) {
+        return nullptr;
+    }
+    const auto start = std::chrono::steady_clock::now();
+    const bool ready = pending.value()->job.WaitFor(allowance);
+    SpendShaderWait(start);
+    if (!ready) {
+        return nullptr;
+    }
+    PublishGraphics(); // erases the pending entry once it is published
+    const auto found = graphics_pipelines.find(key);
+    return found != graphics_pipelines.end() ? found->second.get() : nullptr;
+}
+
 void PipelineCache::SeedWorkerCaches() {
     if (!compiler || worker_caches_seeded) {
         return;
@@ -739,10 +848,14 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
     }
     sel.draw_indirect_params = params;
     if (!RefreshGraphicsKey(sel)) {
-        if (sel.compilation_pending) {
-            ++g_ps4_pending_draws;
+        // A stage is still translating: wait for it within the budget and select again once.
+        const bool retry = sel.compilation_pending && WaitForPendingShaders();
+        if (!retry || !RefreshGraphicsKey(sel)) {
+            if (sel.compilation_pending) {
+                ++g_ps4_pending_draws;
+            }
+            return nullptr;
         }
-        return nullptr;
     }
     if (AsyncCompilation() && !sel.regs->stage_enable.hs_en && !EmulatorSettings.IsShaderCollect()) {
         const auto found = graphics_pipelines.find(sel.graphics_key);
@@ -778,6 +891,9 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
             if (queued) {
                 pending_graphics.emplace(sel.graphics_key, std::move(build));
             }
+        }
+        if (const auto* pipeline = WaitForPendingGraphics(sel.graphics_key)) {
+            return pipeline;
         }
         ++g_ps4_pending_draws;
         return nullptr;

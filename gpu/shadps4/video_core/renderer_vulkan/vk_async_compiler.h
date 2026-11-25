@@ -134,6 +134,10 @@ public:
             future.wait();
         }
     }
+    /// Waits at most `timeout`; true once the result (or failure) is ready to Poll.
+    bool WaitFor(std::chrono::nanoseconds timeout) const {
+        return future.valid() && future.wait_for(timeout) == std::future_status::ready;
+    }
     std::optional<T> Poll() {
         if (!future.valid() || future.wait_for(std::chrono::seconds{0}) != std::future_status::ready) {
             return std::nullopt;
